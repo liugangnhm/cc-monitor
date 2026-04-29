@@ -8,6 +8,8 @@ from pathlib import Path
 def build():
     project_root = Path(__file__).resolve().parent.parent.parent
     main_py = project_root / "src" / "cc_monitor" / "main.py"
+    icon_ico = project_root / "assets" / "cc-monitor.ico"
+    assets_dir = project_root / "assets"
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -15,8 +17,15 @@ def build():
         "--windowed",
         "--onefile",
         "--clean",
-        str(main_py),
     ]
+
+    if icon_ico.exists():
+        cmd += ["--icon", str(icon_ico)]
+
+    if assets_dir.exists():
+        cmd += ["--add-data", f"{assets_dir};assets"]
+
+    cmd.append(str(main_py))
 
     print(f"Building cc-monitor.exe from {main_py} ...")
     result = subprocess.run(cmd, cwd=str(project_root))

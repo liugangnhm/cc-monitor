@@ -3,10 +3,11 @@
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -17,105 +18,178 @@ from PySide6.QtWidgets import (
 
 from cc_monitor.data import load_sessions, Session, Task
 
+# ── 配色方案 ──────────────────────────────────────────────────────────────
+
+COLORS = {
+    "window_bg": "#eef1f5",
+    "card_bg": "#ffffff",
+    "card_border": "#e2e8f0",
+    "title": "#0f172a",
+    "subtitle": "#94a3b8",
+    "separator": "#f1f5f9",
+    "accent_busy": "#f59e0b",
+    "accent_idle": "#3b82f6",
+    "accent_dead": "#e2e8f0",
+    "dot_done": "#22c55e",
+    "dot_active": "#f59e0b",
+    "dot_pending": "#cbd5e1",
+    "badge_busy_bg": "#fef3c7",
+    "badge_busy_text": "#b45309",
+    "badge_idle_bg": "#dbeafe",
+    "badge_idle_text": "#1e40af",
+    "task_text": "#334155",
+    "task_done_text": "#94a3b8",
+    "empty_text": "#94a3b8",
+    "header_bg": "#ffffff",
+    "header_title": "#0f172a",
+    "header_accent": "#6366f1",
+    "status_text": "#64748b",
+}
+
 TASK_STYLES = {
-    "completed":   {"icon": "✅", "color": "#2e7d32"},
-    "in_progress": {"icon": "🔄", "color": "#e65100"},
-    "pending":     {"icon": "⏳", "color": "#757575"},
+    "completed":   {"dot": COLORS["dot_done"],   "text": COLORS["task_done_text"]},
+    "in_progress": {"dot": COLORS["dot_active"],  "text": COLORS["task_text"]},
+    "pending":     {"dot": COLORS["dot_pending"], "text": COLORS["subtitle"]},
 }
 
-SESSION_STYLES = {
-    "busy": {"text": "⚡ 工作中", "bg": "#fff3e0", "color": "#e65100", "border": "#ff9800"},
-    "idle": {"text": "● 就绪",   "bg": "#e3f2fd", "color": "#1565c0", "border": "#2196f3"},
+SESSION_BADGE = {
+    "busy": {"label": "工作中", "bg": COLORS["badge_busy_bg"], "color": COLORS["badge_busy_text"]},
+    "idle": {"label": "就绪",   "bg": COLORS["badge_idle_bg"], "color": COLORS["badge_idle_text"]},
 }
-
-CARD_CSS = """
-QFrame {{
-    background: {bg};
-    border: 1px solid {border};
-    border-radius: 8px;
-    padding: 12px;
-}}
-QFrame:hover {{
-    border-color: {hover};
-}}
-"""
 
 
 def _make_card(session: Session) -> QFrame:
+    outer = QFrame()
+    outer.setStyleSheet("QFrame { background: transparent; border: none; }")
+
+    # Accent color based on status
+    if session.is_alive and session.status == "busy":
+        accent_color = COLORS["accent_busy"]
+    elif session.is_alive:
+        accent_color = COLORS["accent_idle"]
+    else:
+        accent_color = COLORS["accent_dead"]
+
+    outer_layout = QHBoxLayout(outer)
+    outer_layout.setContentsMargins(0, 0, 0, 0)
+    outer_layout.setSpacing(0)
+
+    # Left accent strip
+    strip = QFrame()
+    strip.setFixedWidth(4)
+    strip.setStyleSheet(
+        f"QFrame {{ background: {accent_color}; border: none; border-radius: 2px; }}"
+    )
+    outer_layout.addWidget(strip)
+
+    # Main card body
     card = QFrame()
-    card.setStyleSheet(CARD_CSS.format(
-        bg="#ffffff", border="#e0e0e0", hover="#bdbdbd",
-    ))
+    card.setStyleSheet(
+        f"QFrame {{ background: {COLORS['card_bg']}; border: none; "
+        f"border-radius: 0 10px 10px 0; }}"
+    )
 
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(12, 10, 12, 10)
-    layout.setSpacing(6)
+    # Shadow on card
+    shadow = QGraphicsDropShadowEffect(card)
+    shadow.setBlurRadius(16)
+    shadow.setXOffset(0)
+    shadow.setYOffset(3)
+    shadow.setColor(QColor(0, 0, 0, 20))
+    card.setGraphicsEffect(shadow)
 
-    # Header: project name + status badge
+    body = QVBoxLayout(card)
+    body.setContentsMargins(18, 16, 18, 16)
+    body.setSpacing(10)
+
+    # ── Header row ──
     header = QHBoxLayout()
-    header.setSpacing(8)
+    header.setSpacing(10)
 
     project_name = session.name or ""
     if not project_name and session.cwd:
         import os
         project_name = os.path.basename(session.cwd) or "Unknown"
 
-    name_label = QLabel(project_name)
-    name_label.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
-    name_label.setStyleSheet("border: none; background: transparent;")
-    header.addWidget(name_label)
-
-    header.addStretch()
+    name = QLabel(project_name)
+    name.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+    name.setStyleSheet(
+        f"color: {COLORS['title']}; background: transparent; border: none;"
+    )
+    name.setWordWrap(True)
+    header.addWidget(name, 1)
 
     if session.is_alive:
-        style = SESSION_STYLES.get(session.status, SESSION_STYLES["idle"])
-        badge = QLabel(style["text"])
+        badge_style = SESSION_BADGE.get(session.status, SESSION_BADGE["idle"])
+        badge = QLabel(badge_style["label"])
         badge.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         badge.setStyleSheet(
-            f"border: none; background: {style['bg']}; color: {style['color']}; "
-            f"border-radius: 4px; padding: 2px 8px;"
+            f"QLabel {{ background: {badge_style['bg']}; color: {badge_style['color']}; "
+            f"border: none; border-radius: 10px; padding: 4px 14px; }}"
         )
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedHeight(24)
         header.addWidget(badge)
 
-    layout.addLayout(header)
+    body.addLayout(header)
 
-    # Separator
+    # ── Separator ──
     sep = QFrame()
-    sep.setFrameShape(QFrame.HLine)
-    sep.setStyleSheet("border: none; background: #eeeeee; max-height: 1px;")
-    layout.addWidget(sep)
+    sep.setFixedHeight(1)
+    sep.setStyleSheet(f"background: {COLORS['separator']}; border: none;")
+    body.addWidget(sep)
 
-    # Tasks
+    # ── Tasks ──
     if session.tasks:
-        for task in session.tasks:
+        for task in session.tasks[:8]:
             ts = TASK_STYLES.get(task.status, TASK_STYLES["pending"])
             row = QHBoxLayout()
-            row.setSpacing(6)
+            row.setSpacing(10)
 
-            icon = QLabel(ts["icon"])
-            icon.setStyleSheet("border: none; background: transparent;")
-            icon.setFont(QFont("Segoe UI Emoji", 10))
-            row.addWidget(icon)
+            # Status dot
+            dot = QLabel()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet(
+                f"QLabel {{ background: {ts['dot']}; border-radius: 4px; }}"
+            )
+            row.addWidget(dot)
 
             text = QLabel(task.subject)
             text.setFont(QFont("Microsoft YaHei", 9))
-            text.setStyleSheet(f"border: none; background: transparent; color: #333333;")
-            row.addWidget(text)
-            row.addStretch()
+            text.setStyleSheet(
+                f"color: {ts['text']}; background: transparent; border: none;"
+            )
+            text.setWordWrap(True)
+            row.addWidget(text, 1)
+            body.addLayout(row)
 
-            layout.addLayout(row)
+        if len(session.tasks) > 8:
+            more = QLabel(f"  +{len(session.tasks) - 8} 个任务")
+            more.setFont(QFont("Microsoft YaHei", 8))
+            more.setStyleSheet(
+                f"color: {COLORS['subtitle']}; background: transparent; border: none;"
+            )
+            body.addWidget(more)
     else:
-        no_task = QLabel("暂无任务")
-        no_task.setFont(QFont("Microsoft YaHei", 9))
-        no_task.setStyleSheet("border: none; background: transparent; color: #999999;")
-        layout.addWidget(no_task)
+        empty_row = QHBoxLayout()
+        empty_row.addStretch()
+        empty_text = QLabel("暂无任务")
+        empty_text.setFont(QFont("Microsoft YaHei", 9))
+        empty_text.setStyleSheet(
+            f"color: {COLORS['empty_text']}; background: transparent; border: none;"
+        )
+        empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_row.addWidget(empty_text)
+        empty_row.addStretch()
+        body.addLayout(empty_row)
 
-    return card
+    outer_layout.addWidget(card, 1)
+
+    return outer
 
 
 class MonitorWindow(QWidget):
     REFRESH_MS = 2000
-    CARD_MIN_WIDTH = 260
+    CARD_MIN_WIDTH = 300
 
     def __init__(self):
         super().__init__()
@@ -126,48 +200,75 @@ class MonitorWindow(QWidget):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
-        self.resize(1200, 700)
+        self.resize(1100, 700)
         self.setMinimumSize(500, 400)
 
-        self._cards: list[tuple[str, QFrame]] = []
         self._last_sig: str = ""
-
         self._build_ui()
         self._start_timer()
         self.refresh()
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 8)
-        root.setSpacing(8)
+        self.setStyleSheet(f"background: {COLORS['window_bg']};")
 
-        # Header
-        header = QHBoxLayout()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Top accent line ──
+        accent_line = QFrame()
+        accent_line.setFixedHeight(3)
+        accent_line.setStyleSheet(
+            "QFrame { background: qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #6366f1, stop:0.5 #8b5cf6, stop:1 #a78bfa); "
+            "border: none; }"
+        )
+        root.addWidget(accent_line)
+
+        # ── Top header bar ──
+        header_bar = QFrame()
+        header_bar.setFixedHeight(52)
+        header_bar.setStyleSheet(
+            f"QFrame {{ background: {COLORS['header_bg']}; "
+            f"border-bottom: 1px solid #e2e8f0; }}"
+        )
+
+        header_layout = QHBoxLayout(header_bar)
+        header_layout.setContentsMargins(24, 0, 24, 0)
+
         title = QLabel("Claude Code Monitor")
-        title.setFont(QFont("Microsoft YaHei", 16, QFont.Bold))
-        title.setStyleSheet("color: #333333;")
-        header.addWidget(title)
-        header.addStretch()
+        title.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
+        title.setStyleSheet(
+            f"color: {COLORS['header_title']}; background: transparent; border: none;"
+        )
+        header_layout.addWidget(title)
+        header_layout.addStretch()
 
         self.status_label = QLabel("")
         self.status_label.setFont(QFont("Microsoft YaHei", 9))
-        self.status_label.setStyleSheet("color: #999999;")
-        header.addWidget(self.status_label)
-        root.addLayout(header)
+        self.status_label.setStyleSheet(
+            f"color: {COLORS['status_text']}; background: transparent; border: none;"
+        )
+        header_layout.addWidget(self.status_label)
+        root.addWidget(header_bar)
 
-        # Scroll area
+        # ── Card grid area ──
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet(
-            "QScrollArea { border: none; background: #f5f5f5; border-radius: 8px; }"
-            "QScrollBar:vertical { width: 8px; background: transparent; }"
-            "QScrollBar::handle:vertical { background: #cccccc; border-radius: 4px; min-height: 30px; }"
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollBar:vertical { width: 6px; background: transparent; }"
+            "QScrollBar::handle:vertical { background: #c4c9d0; border-radius: 3px; min-height: 40px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
 
         self.grid_container = QWidget()
+        self.grid_container.setStyleSheet("background: transparent;")
         self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setSpacing(12)
-        self.grid_layout.setContentsMargins(12, 12, 12, 12)
+        self.grid_layout.setSpacing(16)
+        self.grid_layout.setContentsMargins(24, 20, 24, 20)
 
         self.scroll.setWidget(self.grid_container)
         root.addWidget(self.scroll)
@@ -189,7 +290,7 @@ class MonitorWindow(QWidget):
         sig = self._session_sig(sessions)
 
         now = datetime.now().strftime("%H:%M:%S")
-        self.status_label.setText(f"最后刷新: {now} | 共 {len(sessions)} sessions")
+        self.status_label.setText(f"刷新 {now}  ·  {len(sessions)} 会话")
 
         if sig == self._last_sig:
             return
@@ -198,7 +299,6 @@ class MonitorWindow(QWidget):
         self._rebuild_cards(sessions)
 
     def _rebuild_cards(self, sessions: list[Session]):
-        # Clear old cards
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
@@ -209,13 +309,14 @@ class MonitorWindow(QWidget):
         if not sessions:
             empty = QLabel("未检测到活跃 Session")
             empty.setFont(QFont("Microsoft YaHei", 12))
-            empty.setStyleSheet("color: #999999; border: none; background: transparent;")
+            empty.setStyleSheet(
+                f"color: {COLORS['empty_text']}; background: transparent; border: none;"
+            )
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.grid_layout.addWidget(empty, 0, 0)
             return
 
-        # Calculate columns based on current width
-        width = self.scroll.viewport().width() - 24
+        width = self.scroll.viewport().width() - 48
         cols = max(1, width // self.CARD_MIN_WIDTH)
 
         for i, session in enumerate(sessions):
@@ -224,7 +325,6 @@ class MonitorWindow(QWidget):
             card = _make_card(session)
             self.grid_layout.addWidget(card, row, col)
 
-        # Make columns stretch equally
         for col in range(cols):
             self.grid_layout.setColumnStretch(col, 1)
 
@@ -238,7 +338,6 @@ class MonitorWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Recalculate columns on resize
         if hasattr(self, "_last_sig") and self._last_sig:
             sessions = load_sessions()
             self._rebuild_cards(sessions)
