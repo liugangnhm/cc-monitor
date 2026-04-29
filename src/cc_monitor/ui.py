@@ -93,15 +93,23 @@ class MonitorApp:
         card.grid(row=row, column=col, padx=10, pady=10, sticky=NSEW)
         card.columnconfigure(0, weight=1)
 
-        # Idle indicator
-        if session.is_alive and session.status == "idle":
-            idle_badge = ttk.Label(
+        # Session status indicator
+        if session.is_alive and session.status == "busy":
+            busy_badge = ttk.Label(
                 card,
-                text=" 等待回答 ",
+                text=" 工作中 ",
                 font=("Helvetica", 9),
-                bootstyle=DANGER,
+                bootstyle=WARNING,
             )
-            idle_badge.grid(row=0, column=0, sticky=W, pady=(0, 8))
+            busy_badge.grid(row=0, column=0, sticky=W, pady=(0, 8))
+        elif session.is_alive and session.status == "idle":
+            ready_badge = ttk.Label(
+                card,
+                text=" 就绪 ",
+                font=("Helvetica", 9),
+                bootstyle=INFO,
+            )
+            ready_badge.grid(row=0, column=0, sticky=W, pady=(0, 8))
 
         # Tasks
         if session.tasks:
