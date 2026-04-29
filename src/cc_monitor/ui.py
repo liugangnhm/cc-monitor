@@ -1,203 +1,244 @@
-"""Claude Code Monitor GUI."""
+"""Claude Code Monitor GUI with PySide6."""
 
-import os
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk
 
-import ttkbootstrap as ttkb
-from ttkbootstrap.constants import *
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from cc_monitor.data import load_sessions, Session, Task
 
 TASK_STYLES = {
-    "completed":   {"icon": "✓", "color": SUCCESS},
-    "in_progress": {"icon": "◎", "color": WARNING},
-    "pending":     {"icon": "○", "color": SECONDARY},
+    "completed":   {"icon": "✅", "color": "#2e7d32"},
+    "in_progress": {"icon": "🔄", "color": "#e65100"},
+    "pending":     {"icon": "⏳", "color": "#757575"},
 }
 
 SESSION_STYLES = {
-    "busy": {"text": "工作中", "icon": "⚡", "color": WARNING},
-    "idle": {"text": "就绪",   "icon": "●",  "color": INFO},
+    "busy": {"text": "⚡ 工作中", "bg": "#fff3e0", "color": "#e65100", "border": "#ff9800"},
+    "idle": {"text": "● 就绪",   "bg": "#e3f2fd", "color": "#1565c0", "border": "#2196f3"},
 }
 
+CARD_CSS = """
+QFrame {{
+    background: {bg};
+    border: 1px solid {border};
+    border-radius: 8px;
+    padding: 12px;
+}}
+QFrame:hover {{
+    border-color: {hover};
+}}
+"""
 
-def _session_signature(session: Session) -> str:
-    """Compact string representing session state for change detection."""
-    tasks_str = "|".join(f"{t.id}:{t.status}:{t.subject}" for t in session.tasks)
-    return f"{session.session_id}:{session.status}:{session.is_alive}:{tasks_str}"
+
+def _make_card(session: Session) -> QFrame:
+    card = QFrame()
+    card.setStyleSheet(CARD_CSS.format(
+        bg="#ffffff", border="#e0e0e0", hover="#bdbdbd",
+    ))
+
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(12, 10, 12, 10)
+    layout.setSpacing(6)
+
+    # Header: project name + status badge
+    header = QHBoxLayout()
+    header.setSpacing(8)
+
+    project_name = session.name or ""
+    if not project_name and session.cwd:
+        import os
+        project_name = os.path.basename(session.cwd) or "Unknown"
+
+    name_label = QLabel(project_name)
+    name_label.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+    name_label.setStyleSheet("border: none; background: transparent;")
+    header.addWidget(name_label)
+
+    header.addStretch()
+
+    if session.is_alive:
+        style = SESSION_STYLES.get(session.status, SESSION_STYLES["idle"])
+        badge = QLabel(style["text"])
+        badge.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        badge.setStyleSheet(
+            f"border: none; background: {style['bg']}; color: {style['color']}; "
+            f"border-radius: 4px; padding: 2px 8px;"
+        )
+        header.addWidget(badge)
+
+    layout.addLayout(header)
+
+    # Separator
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setStyleSheet("border: none; background: #eeeeee; max-height: 1px;")
+    layout.addWidget(sep)
+
+    # Tasks
+    if session.tasks:
+        for task in session.tasks:
+            ts = TASK_STYLES.get(task.status, TASK_STYLES["pending"])
+            row = QHBoxLayout()
+            row.setSpacing(6)
+
+            icon = QLabel(ts["icon"])
+            icon.setStyleSheet("border: none; background: transparent;")
+            icon.setFont(QFont("Segoe UI Emoji", 10))
+            row.addWidget(icon)
+
+            text = QLabel(task.subject)
+            text.setFont(QFont("Microsoft YaHei", 9))
+            text.setStyleSheet(f"border: none; background: transparent; color: #333333;")
+            row.addWidget(text)
+            row.addStretch()
+
+            layout.addLayout(row)
+    else:
+        no_task = QLabel("暂无任务")
+        no_task.setFont(QFont("Microsoft YaHei", 9))
+        no_task.setStyleSheet("border: none; background: transparent; color: #999999;")
+        layout.addWidget(no_task)
+
+    return card
 
 
-class MonitorApp:
-    REFRESH_INTERVAL_MS = 2000
-    CARD_MIN_WIDTH = 220
+class MonitorWindow(QWidget):
+    REFRESH_MS = 2000
+    CARD_MIN_WIDTH = 260
 
-    def __init__(self, root: ttkb.Window):
-        self.root = root
-        self.root.title("Claude Code Monitor")
-        self.root.geometry("1200x700")
-        self.root.minsize(500, 400)
-        self.root.attributes("-topmost", True)
-        self.root.resizable(True, True)
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Claude Code Monitor")
+        self.setWindowFlags(
+            Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Window
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
+        self.resize(1200, 700)
+        self.setMinimumSize(500, 400)
 
-        self._sessions: list[Session] = []
-        self._last_signature: str = ""
-        self._last_cols: int = 0
+        self._cards: list[tuple[str, QFrame]] = []
+        self._last_sig: str = ""
+
         self._build_ui()
+        self._start_timer()
         self.refresh()
 
-    def _calc_columns(self, canvas_width: int) -> int:
-        return max(1, canvas_width // self.CARD_MIN_WIDTH)
-
     def _build_ui(self):
-        self.main_frame = ttk.Frame(self.root, padding=(15, 10))
-        self.main_frame.pack(fill=BOTH, expand=True)
-        self.main_frame.columnconfigure(0, weight=1)
-        self.main_frame.rowconfigure(1, weight=1)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 12, 16, 8)
+        root.setSpacing(8)
 
         # Header
-        header_frame = ttk.Frame(self.main_frame)
-        header_frame.grid(row=0, column=0, sticky=EW, pady=(0, 12))
+        header = QHBoxLayout()
+        title = QLabel("Claude Code Monitor")
+        title.setFont(QFont("Microsoft YaHei", 16, QFont.Bold))
+        title.setStyleSheet("color: #333333;")
+        header.addWidget(title)
+        header.addStretch()
 
-        ttk.Label(
-            header_frame,
-            text="Claude Code Monitor",
-            font=("Helvetica", 16, "bold"),
-        ).pack(side=LEFT)
+        self.status_label = QLabel("")
+        self.status_label.setFont(QFont("Microsoft YaHei", 9))
+        self.status_label.setStyleSheet("color: #999999;")
+        header.addWidget(self.status_label)
+        root.addLayout(header)
 
-        self.status_bar = ttk.Label(
-            header_frame,
-            text="",
-            font=("Helvetica", 9),
-            foreground="gray",
-        )
-        self.status_bar.pack(side=RIGHT)
-
-        # Canvas + Scrollbar
-        self.canvas = tk.Canvas(self.main_frame, highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(
-            self.main_frame, orient=VERTICAL, command=self.canvas.yview
-        )
-        self.grid_frame = ttk.Frame(self.canvas)
-
-        self._grid_window_id = self.canvas.create_window(
-            (0, 0), window=self.grid_frame, anchor=NW
+        # Scroll area
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet(
+            "QScrollArea { border: none; background: #f5f5f5; border-radius: 8px; }"
+            "QScrollBar:vertical { width: 8px; background: transparent; }"
+            "QScrollBar::handle:vertical { background: #cccccc; border-radius: 4px; min-height: 30px; }"
         )
 
-        def _on_canvas_configure(event):
-            self.canvas.itemconfig(self._grid_window_id, width=event.width)
-            new_cols = self._calc_columns(event.width)
-            if new_cols != self._last_cols:
-                self._last_cols = new_cols
-                self._full_relayout()
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setSpacing(12)
+        self.grid_layout.setContentsMargins(12, 12, 12, 12)
 
-        self.canvas.bind("<Configure>", _on_canvas_configure)
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.scroll.setWidget(self.grid_container)
+        root.addWidget(self.scroll)
 
-        self.canvas.grid(row=1, column=0, sticky=NSEW)
-        self.scrollbar.grid(row=1, column=1, sticky=NS)
+    def _start_timer(self):
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(self.REFRESH_MS)
 
-        def _on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-    def _clear_grid(self):
-        for widget in self.grid_frame.winfo_children():
-            widget.destroy()
-
-    def _full_relayout(self):
-        """Destroy and rebuild all cards."""
-        cols = self._last_cols or 1
-        self._clear_grid()
-
-        for col in range(cols):
-            self.grid_frame.columnconfigure(col, weight=1, uniform="session")
-
-        if not self._sessions:
-            ttk.Label(
-                self.grid_frame,
-                text="未检测到活跃 Session",
-                font=("Helvetica", 12),
-                foreground="gray",
-            ).grid(row=0, column=0, columnspan=max(cols, 1), pady=60)
-        else:
-            for i, session in enumerate(self._sessions):
-                self._render_session(session, i // cols, i % cols)
-
-        self.grid_frame.update_idletasks()
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _render_session(self, session: Session, row: int, col: int):
-        project_name = session.name or os.path.basename(session.cwd) or "Unknown"
-
-        card = ttk.LabelFrame(
-            self.grid_frame,
-            text=f"  {project_name}  ",
-            padding=10,
-        )
-        card.grid(row=row, column=col, padx=6, pady=6, sticky=NSEW)
-        card.columnconfigure(0, weight=1)
-
-        # Session status badge
-        if session.is_alive:
-            style = SESSION_STYLES.get(session.status, SESSION_STYLES["idle"])
-            badge = ttk.Label(
-                card,
-                text=f" {style['icon']}  {style['text']} ",
-                font=("Helvetica", 10, "bold"),
-                bootstyle=style["color"],
-            )
-            badge.grid(row=0, column=0, sticky=W, pady=(0, 6))
-
-        # Separator
-        ttk.Separator(card).grid(row=1, column=0, sticky=EW, pady=(0, 6))
-
-        # Tasks
-        if session.tasks:
-            for idx, task in enumerate(session.tasks):
-                self._render_task(card, task, row=idx + 2)
-        else:
-            ttk.Label(
-                card,
-                text="暂无任务",
-                font=("Helvetica", 9),
-                foreground="gray",
-            ).grid(row=2, column=0, sticky=W, pady=4)
-
-    def _render_task(self, parent: ttk.Frame, task: Task, row: int):
-        ts = TASK_STYLES.get(task.status, TASK_STYLES["pending"])
-
-        task_frame = ttk.Frame(parent)
-        task_frame.grid(row=row, column=0, sticky=EW, pady=2)
-
-        ttk.Label(
-            task_frame,
-            text=ts["icon"],
-            font=("Segoe UI", 11, "bold"),
-            bootstyle=ts["color"],
-        ).pack(side=LEFT, padx=(0, 4))
-
-        ttk.Label(
-            task_frame,
-            text=task.subject,
-            font=("Helvetica", 9),
-        ).pack(side=LEFT, fill=X)
+    def _session_sig(self, sessions: list[Session]) -> str:
+        parts = []
+        for s in sessions:
+            tasks = "|".join(f"{t.id}:{t.status}:{t.subject}" for t in s.tasks)
+            parts.append(f"{s.session_id}:{s.status}:{s.is_alive}:{tasks}")
+        return "||".join(parts)
 
     def refresh(self):
-        self._sessions = load_sessions()
+        sessions = load_sessions()
+        sig = self._session_sig(sessions)
 
-        # Build signature to detect changes
-        sig = "|".join(_session_signature(s) for s in self._sessions)
-
-        # Only rebuild if data or layout changed
-        if sig != self._last_signature:
-            self._last_signature = sig
-            self._full_relayout()
-
-        # Always update status bar time
         now = datetime.now().strftime("%H:%M:%S")
-        count = len(self._sessions)
-        self.status_bar.config(text=f"最后刷新: {now} | 共 {count} sessions")
+        self.status_label.setText(f"最后刷新: {now} | 共 {len(sessions)} sessions")
 
-        self.root.after(self.REFRESH_INTERVAL_MS, self.refresh)
+        if sig == self._last_sig:
+            return
+
+        self._last_sig = sig
+        self._rebuild_cards(sessions)
+
+    def _rebuild_cards(self, sessions: list[Session]):
+        # Clear old cards
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
+
+        if not sessions:
+            empty = QLabel("未检测到活跃 Session")
+            empty.setFont(QFont("Microsoft YaHei", 12))
+            empty.setStyleSheet("color: #999999; border: none; background: transparent;")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.grid_layout.addWidget(empty, 0, 0)
+            return
+
+        # Calculate columns based on current width
+        width = self.scroll.viewport().width() - 24
+        cols = max(1, width // self.CARD_MIN_WIDTH)
+
+        for i, session in enumerate(sessions):
+            row = i // cols
+            col = i % cols
+            card = _make_card(session)
+            self.grid_layout.addWidget(card, row, col)
+
+        # Make columns stretch equally
+        for col in range(cols):
+            self.grid_layout.setColumnStretch(col, 1)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Recalculate columns on resize
+        if hasattr(self, "_last_sig") and self._last_sig:
+            sessions = load_sessions()
+            self._rebuild_cards(sessions)

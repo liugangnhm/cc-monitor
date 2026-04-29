@@ -1,14 +1,18 @@
 """Claude Code Monitor entry point."""
 
-import ttkbootstrap as ttkb
+import sys
 
-from cc_monitor.ui import MonitorApp
+from PySide6.QtWidgets import QApplication
+
+from cc_monitor.ui import MonitorWindow
 
 
 def main():
-    app = ttkb.Window(themename="cosmo")
-    MonitorApp(app)
-    app.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    window = MonitorWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
