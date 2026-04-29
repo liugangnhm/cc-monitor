@@ -6,7 +6,7 @@ from cc_monitor.ui import MonitorApp
 
 
 def main():
-    app = ttkb.Window(themename="darkly")
+    app = ttkb.Window(themename="cosmo")
     MonitorApp(app)
     app.mainloop()
 
