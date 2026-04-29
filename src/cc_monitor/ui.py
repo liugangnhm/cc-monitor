@@ -10,11 +10,10 @@ from ttkbootstrap.constants import *
 
 from cc_monitor.data import load_sessions, Session, Task
 
-# Task status visual config
 TASK_STYLES = {
-    "completed":  {"icon": "✓", "color": SUCCESS,  "fg": "#2e7d32"},
-    "in_progress": {"icon": "◎", "color": WARNING,  "fg": "#e65100"},
-    "pending":    {"icon": "○", "color": SECONDARY, "fg": "#757575"},
+    "completed":   {"icon": "✓", "color": SUCCESS},
+    "in_progress": {"icon": "◎", "color": WARNING},
+    "pending":     {"icon": "○", "color": SECONDARY},
 }
 
 SESSION_STYLES = {
@@ -23,9 +22,15 @@ SESSION_STYLES = {
 }
 
 
+def _session_signature(session: Session) -> str:
+    """Compact string representing session state for change detection."""
+    tasks_str = "|".join(f"{t.id}:{t.status}:{t.subject}" for t in session.tasks)
+    return f"{session.session_id}:{session.status}:{session.is_alive}:{tasks_str}"
+
+
 class MonitorApp:
     REFRESH_INTERVAL_MS = 2000
-    CARD_MIN_WIDTH = 300
+    CARD_MIN_WIDTH = 220
 
     def __init__(self, root: ttkb.Window):
         self.root = root
@@ -36,6 +41,8 @@ class MonitorApp:
         self.root.resizable(True, True)
 
         self._sessions: list[Session] = []
+        self._last_signature: str = ""
+        self._last_cols: int = 0
         self._build_ui()
         self.refresh()
 
@@ -51,12 +58,6 @@ class MonitorApp:
         # Header
         header_frame = ttk.Frame(self.main_frame)
         header_frame.grid(row=0, column=0, sticky=EW, pady=(0, 12))
-
-        ttk.Label(
-            header_frame,
-            text="⬡",
-            font=("Segoe UI Emoji", 18),
-        ).pack(side=LEFT, padx=(0, 6))
 
         ttk.Label(
             header_frame,
@@ -85,7 +86,10 @@ class MonitorApp:
 
         def _on_canvas_configure(event):
             self.canvas.itemconfig(self._grid_window_id, width=event.width)
-            self._relayout()
+            new_cols = self._calc_columns(event.width)
+            if new_cols != self._last_cols:
+                self._last_cols = new_cols
+                self._full_relayout()
 
         self.canvas.bind("<Configure>", _on_canvas_configure)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
@@ -102,12 +106,9 @@ class MonitorApp:
         for widget in self.grid_frame.winfo_children():
             widget.destroy()
 
-    def _relayout(self):
-        canvas_width = self.canvas.winfo_width()
-        if canvas_width <= 1:
-            return
-
-        cols = self._calc_columns(canvas_width)
+    def _full_relayout(self):
+        """Destroy and rebuild all cards."""
+        cols = self._last_cols or 1
         self._clear_grid()
 
         for col in range(cols):
@@ -130,38 +131,27 @@ class MonitorApp:
     def _render_session(self, session: Session, row: int, col: int):
         project_name = session.name or os.path.basename(session.cwd) or "Unknown"
 
-        card = ttk.Frame(self.grid_frame, padding=12)
-        card.grid(row=row, column=col, padx=8, pady=8, sticky=NSEW)
-        card.columnconfigure(0, weight=1)
-
-        # Apply card border via themed LabelFrame wrapper
-        card_border = ttk.LabelFrame(
+        card = ttk.LabelFrame(
             self.grid_frame,
             text=f"  {project_name}  ",
-            padding=12,
+            padding=10,
         )
-        card_border.grid(row=row, column=col, padx=8, pady=8, sticky=NSEW)
-        card_border.columnconfigure(0, weight=1)
-
-        # Reassign card to the LabelFrame
-        card = card_border
+        card.grid(row=row, column=col, padx=6, pady=6, sticky=NSEW)
+        card.columnconfigure(0, weight=1)
 
         # Session status badge
         if session.is_alive:
             style = SESSION_STYLES.get(session.status, SESSION_STYLES["idle"])
-            badge_frame = ttk.Frame(card)
-            badge_frame.grid(row=0, column=0, sticky=W, pady=(0, 8))
-
             badge = ttk.Label(
-                badge_frame,
+                card,
                 text=f" {style['icon']}  {style['text']} ",
                 font=("Helvetica", 10, "bold"),
                 bootstyle=style["color"],
             )
-            badge.pack(side=LEFT)
+            badge.grid(row=0, column=0, sticky=W, pady=(0, 6))
 
         # Separator
-        ttk.Separator(card).grid(row=1, column=0, sticky=EW, pady=(0, 8))
+        ttk.Separator(card).grid(row=1, column=0, sticky=EW, pady=(0, 6))
 
         # Tasks
         if session.tasks:
@@ -179,27 +169,33 @@ class MonitorApp:
         ts = TASK_STYLES.get(task.status, TASK_STYLES["pending"])
 
         task_frame = ttk.Frame(parent)
-        task_frame.grid(row=row, column=0, sticky=EW, pady=3)
+        task_frame.grid(row=row, column=0, sticky=EW, pady=2)
 
-        icon_label = ttk.Label(
+        ttk.Label(
             task_frame,
             text=ts["icon"],
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             bootstyle=ts["color"],
-        )
-        icon_label.pack(side=LEFT, padx=(0, 6))
+        ).pack(side=LEFT, padx=(0, 4))
 
         ttk.Label(
             task_frame,
             text=task.subject,
             font=("Helvetica", 9),
-            wraplength=220,
         ).pack(side=LEFT, fill=X)
 
     def refresh(self):
         self._sessions = load_sessions()
-        self._relayout()
 
+        # Build signature to detect changes
+        sig = "|".join(_session_signature(s) for s in self._sessions)
+
+        # Only rebuild if data or layout changed
+        if sig != self._last_signature:
+            self._last_signature = sig
+            self._full_relayout()
+
+        # Always update status bar time
         now = datetime.now().strftime("%H:%M:%S")
         count = len(self._sessions)
         self.status_bar.config(text=f"最后刷新: {now} | 共 {count} sessions")
