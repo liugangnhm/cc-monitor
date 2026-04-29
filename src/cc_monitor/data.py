@@ -1,11 +1,13 @@
 """Claude Code 数据读取层."""
 
 import json
+import logging
 import os
 from dataclasses import dataclass
-from typing import List
 
 import psutil
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,12 +33,12 @@ def _claude_dir() -> str:
 
 
 def is_process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         proc = psutil.Process(pid)
         return proc.is_running()
-    except psutil.NoSuchProcess:
-        return False
-    except psutil.AccessDenied:
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
 
 
@@ -60,7 +62,8 @@ def load_tasks(session_id: str) -> list[Task]:
                     status=data.get("status", "pending"),
                 )
             )
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load task from %s: %s", filepath, e)
             continue
 
     return tasks
@@ -80,7 +83,8 @@ def load_sessions() -> list[Session]:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load session from %s: %s", filepath, e)
             continue
 
         pid = data.get("pid", 0)
