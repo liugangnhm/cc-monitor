@@ -24,6 +24,9 @@ wheels/
 env/
 venv/
 
+# PyInstaller
+*.spec
+
 # IDE
 .vscode/
 .idea/
