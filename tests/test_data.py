@@ -33,9 +33,10 @@ class TestSession:
 class TestLoadSessions:
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
     @patch("builtins.open")
     @patch("cc_monitor.data.is_process_alive")
-    def test_load_sessions_success(self, mock_alive, mock_open, mock_expanduser, mock_listdir):
+    def test_load_sessions_success(self, mock_alive, mock_open, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = ["1234.json"]
 
@@ -71,7 +72,8 @@ class TestLoadSessions:
 
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
-    def test_load_sessions_empty(self, mock_expanduser, mock_listdir):
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
+    def test_load_sessions_empty(self, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = []
 
@@ -80,7 +82,8 @@ class TestLoadSessions:
 
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
-    def test_load_sessions_ignores_non_json(self, mock_expanduser, mock_listdir):
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
+    def test_load_sessions_ignores_non_json(self, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = [".highwatermark", "not-json.txt"]
 
@@ -89,9 +92,10 @@ class TestLoadSessions:
 
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
     @patch("builtins.open")
     @patch("cc_monitor.data.is_process_alive")
-    def test_load_sessions_skips_invalid_json(self, mock_alive, mock_open, mock_expanduser, mock_listdir):
+    def test_load_sessions_skips_invalid_json(self, mock_alive, mock_open, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = ["1234.json", "5678.json"]
 
@@ -114,8 +118,9 @@ class TestLoadSessions:
 class TestLoadTasks:
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
     @patch("builtins.open")
-    def test_load_tasks_success(self, mock_open, mock_expanduser, mock_listdir):
+    def test_load_tasks_success(self, mock_open, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = ["1.json", "2.json", ".lock", ".highwatermark"]
 
@@ -142,7 +147,8 @@ class TestLoadTasks:
 
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
-    def test_load_tasks_empty(self, mock_expanduser, mock_listdir):
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
+    def test_load_tasks_empty(self, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = []
 
@@ -151,8 +157,9 @@ class TestLoadTasks:
 
     @patch("cc_monitor.data.os.listdir")
     @patch("cc_monitor.data.os.path.expanduser")
+    @patch("cc_monitor.data.os.path.exists", return_value=True)
     @patch("builtins.open")
-    def test_load_tasks_skips_invalid_json(self, mock_open, mock_expanduser, mock_listdir):
+    def test_load_tasks_skips_invalid_json(self, mock_open, mock_exists, mock_expanduser, mock_listdir):
         mock_expanduser.return_value = "C:\\Users\\test\\.claude"
         mock_listdir.return_value = ["1.json", "2.json"]
 
