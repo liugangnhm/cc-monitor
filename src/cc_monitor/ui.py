@@ -1,6 +1,7 @@
 """Claude Code Monitor GUI."""
 
 import os
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk
 
@@ -144,7 +145,6 @@ class MonitorApp:
                 self._render_session(session)
 
         # Update status bar
-        from datetime import datetime
         now = datetime.now().strftime("%H:%M:%S")
         count = len(sessions)
         self.status_bar.config(text=f"最后刷新: {now} | 共 {count} sessions")
