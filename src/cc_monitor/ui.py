@@ -27,10 +27,7 @@ class MonitorApp:
         self._build_ui()
         self.refresh()
 
-    def _calc_columns(self) -> int:
-        canvas_width = self.canvas.winfo_width()
-        if canvas_width <= 1:
-            canvas_width = int(self.root.winfo_width()) - 40
+    def _calc_columns(self, canvas_width: int) -> int:
         cols = max(1, canvas_width // self.CARD_MIN_WIDTH)
         return cols
 
@@ -55,24 +52,14 @@ class MonitorApp:
         )
         self.grid_frame = ttk.Frame(self.canvas)
 
-        self.canvas.create_window((0, 0), window=self.grid_frame, anchor=NW)
+        self._grid_window_id = self.canvas.create_window(
+            (0, 0), window=self.grid_frame, anchor=NW
+        )
 
         def _on_canvas_configure(event):
-            canvas_width = event.width
-            self.canvas.itemconfig(
-                self._grid_window_id, width=canvas_width
-            )
-            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            width = event.width
+            self.canvas.itemconfig(self._grid_window_id, width=width)
             self._relayout()
-
-        self._grid_window_id = self.canvas.create_window(
-            (0, 0), window=self.grid_frame, anchor=NW
-        )
-        # remove the first duplicate window created above
-        self.canvas.delete("all")
-        self._grid_window_id = self.canvas.create_window(
-            (0, 0), window=self.grid_frame, anchor=NW
-        )
 
         self.canvas.bind("<Configure>", _on_canvas_configure)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
@@ -106,11 +93,13 @@ class MonitorApp:
     def _clear_grid(self):
         for widget in self.grid_frame.winfo_children():
             widget.destroy()
-        for col in range(self.grid_frame.grid_size()[0]):
-            self.grid_frame.columnconfigure(col, weight=0)
 
     def _relayout(self):
-        cols = self._calc_columns()
+        canvas_width = self.canvas.winfo_width()
+        if canvas_width <= 1:
+            return
+
+        cols = self._calc_columns(canvas_width)
         self._clear_grid()
 
         for col in range(cols):
@@ -130,6 +119,7 @@ class MonitorApp:
                 col = i % cols
                 self._render_session(session, row, col)
 
+        self.grid_frame.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _render_session(self, session: Session, row: int, col: int):
