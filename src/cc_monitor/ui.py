@@ -13,17 +13,26 @@ from cc_monitor.data import load_sessions, Session, Task
 
 class MonitorApp:
     REFRESH_INTERVAL_MS = 2000  # 2 seconds
-    COLUMNS = 3
+    CARD_MIN_WIDTH = 280  # minimum card width in pixels
 
     def __init__(self, root: ttkb.Window):
         self.root = root
         self.root.title("Claude Code Monitor")
         self.root.geometry("1200x700")
+        self.root.minsize(400, 300)
         self.root.attributes("-topmost", True)
         self.root.resizable(True, True)
 
+        self._sessions: list[Session] = []
         self._build_ui()
         self.refresh()
+
+    def _calc_columns(self) -> int:
+        canvas_width = self.canvas.winfo_width()
+        if canvas_width <= 1:
+            canvas_width = int(self.root.winfo_width()) - 40
+        cols = max(1, canvas_width // self.CARD_MIN_WIDTH)
+        return cols
 
     def _build_ui(self):
         self.main_frame = ttk.Frame(self.root, padding=10)
@@ -46,19 +55,30 @@ class MonitorApp:
         )
         self.grid_frame = ttk.Frame(self.canvas)
 
-        self.grid_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
-        )
         self.canvas.create_window((0, 0), window=self.grid_frame, anchor=NW)
+
+        def _on_canvas_configure(event):
+            canvas_width = event.width
+            self.canvas.itemconfig(
+                self._grid_window_id, width=canvas_width
+            )
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            self._relayout()
+
+        self._grid_window_id = self.canvas.create_window(
+            (0, 0), window=self.grid_frame, anchor=NW
+        )
+        # remove the first duplicate window created above
+        self.canvas.delete("all")
+        self._grid_window_id = self.canvas.create_window(
+            (0, 0), window=self.grid_frame, anchor=NW
+        )
+
+        self.canvas.bind("<Configure>", _on_canvas_configure)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
         self.canvas.grid(row=1, column=0, sticky=NSEW)
         self.scrollbar.grid(row=1, column=1, sticky=NS)
-
-        # Configure grid columns to be equal width
-        for col in range(self.COLUMNS):
-            self.grid_frame.columnconfigure(col, weight=1, uniform="session")
 
         # Status bar
         self.status_bar = ttk.Label(
@@ -69,6 +89,12 @@ class MonitorApp:
         )
         self.status_bar.grid(row=2, column=0, sticky=W, pady=(10, 0))
 
+        # Mouse wheel scrolling
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
     def _status_color(self, status: str) -> str:
         mapping = {
             "completed": SUCCESS,
@@ -77,14 +103,38 @@ class MonitorApp:
         }
         return mapping.get(status, SECONDARY)
 
-    def _clear_sessions(self):
+    def _clear_grid(self):
         for widget in self.grid_frame.winfo_children():
             widget.destroy()
+        for col in range(self.grid_frame.grid_size()[0]):
+            self.grid_frame.columnconfigure(col, weight=0)
+
+    def _relayout(self):
+        cols = self._calc_columns()
+        self._clear_grid()
+
+        for col in range(cols):
+            self.grid_frame.columnconfigure(col, weight=1, uniform="session")
+
+        if not self._sessions:
+            empty_label = ttk.Label(
+                self.grid_frame,
+                text="未检测到活跃 Session",
+                font=("Helvetica", 12),
+                foreground="gray",
+            )
+            empty_label.grid(row=0, column=0, columnspan=max(cols, 1), pady=40)
+        else:
+            for i, session in enumerate(self._sessions):
+                row = i // cols
+                col = i % cols
+                self._render_session(session, row, col)
+
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _render_session(self, session: Session, row: int, col: int):
         project_name = session.name or os.path.basename(session.cwd) or "Unknown"
 
-        # Card with border
         card = ttk.LabelFrame(
             self.grid_frame,
             text=project_name,
@@ -148,27 +198,12 @@ class MonitorApp:
         task_label.pack(side=LEFT)
 
     def refresh(self):
-        sessions = load_sessions()
-
-        self._clear_sessions()
-
-        if not sessions:
-            empty_label = ttk.Label(
-                self.grid_frame,
-                text="未检测到活跃 Session",
-                font=("Helvetica", 12),
-                foreground="gray",
-            )
-            empty_label.grid(row=0, column=0, columnspan=self.COLUMNS, pady=40)
-        else:
-            for i, session in enumerate(sessions):
-                row = i // self.COLUMNS
-                col = i % self.COLUMNS
-                self._render_session(session, row, col)
+        self._sessions = load_sessions()
+        self._relayout()
 
         # Update status bar
         now = datetime.now().strftime("%H:%M:%S")
-        count = len(sessions)
+        count = len(self._sessions)
         self.status_bar.config(text=f"最后刷新: {now} | 共 {count} sessions")
 
         # Schedule next refresh
