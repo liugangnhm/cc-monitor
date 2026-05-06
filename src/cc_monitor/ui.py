@@ -63,12 +63,14 @@ class ViewMode(Enum):
     DETAIL = "detail"
 
 
-def _make_card(session: Session, blinking: bool = False, blink_phase: bool = False) -> QFrame:
+def _make_card(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False) -> QFrame:
     outer = QFrame()
     outer.setStyleSheet("QFrame { background: transparent; border: none; }")
 
     # Accent color based on status
-    if session.is_alive and session.status == "busy":
+    if is_new:
+        accent_color = COLORS["dot_done"]  # green for new sessions
+    elif session.is_alive and session.status == "busy":
         accent_color = COLORS["accent_busy"]
     elif session.is_alive:
         accent_color = COLORS["accent_idle"]
@@ -79,16 +81,19 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
     outer_layout.setContentsMargins(0, 0, 0, 0)
     outer_layout.setSpacing(0)
 
-    # Left accent strip
+    # Left accent strip (wider for new sessions)
     strip = QFrame()
-    strip.setFixedWidth(4)
+    strip.setFixedWidth(6 if is_new else 4)
     strip.setStyleSheet(
         f"QFrame {{ background: {accent_color}; border: none; border-radius: 2px; }}"
     )
     outer_layout.addWidget(strip)
 
     # Main card body
-    card_bg = "#fef9c3" if blinking and blink_phase else COLORS["card_bg"]
+    if blinking and blink_phase:
+        card_bg = "#dcfce7" if is_new else "#fef9c3"
+    else:
+        card_bg = COLORS["card_bg"]
     card = QFrame()
     card.setStyleSheet(
         f"QFrame {{ background: {card_bg}; border: none; "
@@ -193,13 +198,18 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
     return outer
 
 
-def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False) -> QFrame:
+def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False) -> QFrame:
     row = QFrame()
     row.setFixedHeight(28)
-    bg_color = "#fef9c3" if blinking and blink_phase else "transparent"
+    if blinking and blink_phase:
+        bg_color = "#dcfce7" if is_new else "#fef9c3"
+    else:
+        bg_color = "transparent"
     row.setStyleSheet(f"QFrame {{ background: {bg_color}; border: none; }}")
 
-    if session.is_alive and session.status == "busy":
+    if is_new:
+        accent = COLORS["dot_done"]  # green for new sessions
+    elif session.is_alive and session.status == "busy":
         accent = COLORS["accent_busy"]
     elif session.is_alive:
         accent = COLORS["accent_idle"]
@@ -211,7 +221,7 @@ def _make_compact_row(session: Session, blinking: bool = False, blink_phase: boo
     layout.setSpacing(0)
 
     strip = QFrame()
-    strip.setFixedWidth(4)
+    strip.setFixedWidth(6 if is_new else 4)
     strip.setStyleSheet(f"QFrame {{ background: {accent}; border: none; border-radius: 2px; }}")
     layout.addWidget(strip)
     layout.addSpacing(10)
@@ -261,6 +271,7 @@ class MonitorWindow(QWidget):
         self._drag_pos = None
         self._view_mode = ViewMode.COMPACT
         self._changed_sessions: set[str] = set()
+        self._new_sessions: set[str] = set()
         self._blink_phase = False
         self._flash_count = 0
         self._build_ui()
@@ -432,14 +443,14 @@ class MonitorWindow(QWidget):
             for s in sessions:
                 old = old_map.get(s.session_id)
                 if old is None:
-                    self._changed_sessions.add(s.session_id)
+                    self._new_sessions.add(s.session_id)
                 elif s.status != old.status or s.is_alive != old.is_alive or len(s.tasks) != len(old.tasks):
                     self._changed_sessions.add(s.session_id)
 
         self._last_sessions = list(sessions)
         self._last_sig = sig
 
-        has_changes = bool(self._changed_sessions)
+        has_changes = bool(self._changed_sessions or self._new_sessions)
 
         self.setWindowOpacity(1.0)
         self._opacity_timer.stop()
@@ -447,7 +458,7 @@ class MonitorWindow(QWidget):
 
         self._rebuild_ui(sessions)
 
-        if self._changed_sessions and not self._blink_timer.isActive():
+        if (self._changed_sessions or self._new_sessions) and not self._blink_timer.isActive():
             self._blink_timer.start(500)
 
         if has_changes and not self._flash_timer.isActive():
@@ -461,7 +472,8 @@ class MonitorWindow(QWidget):
 
     def _acknowledge_change(self, session_id: str):
         self._changed_sessions.discard(session_id)
-        if not self._changed_sessions:
+        self._new_sessions.discard(session_id)
+        if not self._changed_sessions and not self._new_sessions:
             self._blink_timer.stop()
         sessions = load_sessions()
         self._rebuild_ui(sessions)
@@ -508,8 +520,9 @@ class MonitorWindow(QWidget):
 
         if self._view_mode == ViewMode.COMPACT:
             for i, session in enumerate(sessions):
-                blinking = session.session_id in self._changed_sessions
-                row = _make_compact_row(session, blinking, self._blink_phase)
+                is_new = session.session_id in self._new_sessions
+                blinking = session.session_id in self._changed_sessions or is_new
+                row = _make_compact_row(session, blinking, self._blink_phase, is_new)
                 if blinking:
                     row.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
                 self.grid_layout.addWidget(row, i, 0)
@@ -519,8 +532,9 @@ class MonitorWindow(QWidget):
             for i, session in enumerate(sessions):
                 row = i // cols
                 col = i % cols
-                blinking = session.session_id in self._changed_sessions
-                card = _make_card(session, blinking, self._blink_phase)
+                is_new = session.session_id in self._new_sessions
+                blinking = session.session_id in self._changed_sessions or is_new
+                card = _make_card(session, blinking, self._blink_phase, is_new)
                 if blinking:
                     card.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
                 self.grid_layout.addWidget(card, row, col)
