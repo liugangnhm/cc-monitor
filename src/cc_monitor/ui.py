@@ -414,16 +414,17 @@ class MonitorWindow(QWidget):
         if sig == self._last_sig:
             return
 
-        # 检测哪些 session 发生了变化
-        old_map = {s.session_id: s for s in self._last_sessions}
-        for s in sessions:
-            old = old_map.get(s.session_id)
-            if old is None:
-                self._changed_sessions.add(s.session_id)
-            elif s.status != old.status or s.is_alive != old.is_alive or len(s.tasks) != len(old.tasks):
-                self._changed_sessions.add(s.session_id)
+        # 检测哪些 session 发生了变化（跳过首次刷新）
+        if self._last_sessions:
+            old_map = {s.session_id: s for s in self._last_sessions}
+            for s in sessions:
+                old = old_map.get(s.session_id)
+                if old is None:
+                    self._changed_sessions.add(s.session_id)
+                elif s.status != old.status or s.is_alive != old.is_alive or len(s.tasks) != len(old.tasks):
+                    self._changed_sessions.add(s.session_id)
 
-        self._last_sessions = sessions
+        self._last_sessions = list(sessions)
         self._last_sig = sig
 
         self.setWindowOpacity(1.0)
