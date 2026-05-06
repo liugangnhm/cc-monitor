@@ -1,17 +1,22 @@
 """Claude Code Monitor GUI with PySide6."""
 
+import json
+import os
 from enum import Enum
 
 from PySide6.QtCore import Qt, QTimer, QEvent, QObject
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -56,6 +61,61 @@ SESSION_BADGE = {
     "busy": {"label": "工作中", "bg": COLORS["badge_busy_bg"], "color": COLORS["badge_busy_text"]},
     "idle": {"label": "就绪",   "bg": COLORS["badge_idle_bg"], "color": COLORS["badge_idle_text"]},
 }
+
+# ── 预设配置持久化 ────────────────────────────────────────────────────────
+
+
+def _history_file() -> str:
+    return os.path.join(os.path.expanduser("~"), ".claude", "cc-monitor", "history.json")
+
+
+def load_history() -> list[str]:
+    filepath = _history_file()
+    if not os.path.exists(filepath):
+        return []
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f).get("workspaces", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_history(workspaces: list[str]):
+    filepath = _history_file()
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump({"workspaces": workspaces}, f, ensure_ascii=False, indent=2)
+
+
+def load_presets() -> list[dict]:
+    """Scan ~/.claude/settings.json.* files as presets."""
+    claude_dir = os.path.join(os.path.expanduser("~"), ".claude")
+    presets: list[dict] = []
+    if not os.path.isdir(claude_dir):
+        return presets
+    for filename in sorted(os.listdir(claude_dir)):
+        if not filename.startswith("settings.json.") or filename == "settings.json":
+            continue
+        filepath = os.path.join(claude_dir, filename)
+        if not os.path.isfile(filepath):
+            continue
+        name = filename[len("settings.json."):].strip()
+        if not name:
+            continue
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        presets.append(
+            {
+                "name": name,
+                "cli_args": ["--allow-dangerously-skip-permissions", "--settings", filepath],
+                "settings": settings,
+                "_filepath": filepath,
+            }
+        )
+    return presets
 
 
 class HoverShowHelper(QObject):
@@ -320,7 +380,7 @@ class SessionDetailWindow(QWidget):
         project_name = self.session.name or ""
         if not project_name and self.session.cwd:
             import os
-            project_name = os.path.basename(self.session.cwd) or "Unknown"
+            project_name = os.path.basename(session.cwd) or "Unknown"
 
         title = QLabel(project_name)
         title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
@@ -408,6 +468,614 @@ class SessionDetailWindow(QWidget):
             content.addWidget(btn)
 
         root.addLayout(content)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 36:
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+
+class PresetEditWindow(QWidget):
+    def __init__(self, preset=None, on_save=None, parent=None):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self._preset = preset or {"name": "", "cli_args": [], "settings": {}}
+        self._on_save = on_save
+        self._drag_pos = None
+        self.resize(340, 520)
+        self._build_ui()
+        self._center_on_parent()
+
+    def _center_on_parent(self):
+        if self.parent():
+            parent_geo = self.parent().geometry()
+            x = parent_geo.center().x() - self.width() // 2
+            y = parent_geo.center().y() - self.height() // 2
+            self.move(x, y)
+
+    def _build_ui(self):
+        self.setStyleSheet(f"background: {COLORS['window_bg']}; border-radius: 8px;")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header
+        header = QFrame()
+        header.setFixedHeight(36)
+        header.setStyleSheet(f"background: {COLORS['header_bg']}; border-bottom: 1px solid #e2e8f0;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        is_new = not self._preset.get("name")
+        title = QLabel("添加预设" if is_new else "编辑预设")
+        title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        title.setStyleSheet(f"color: {COLORS['title']};")
+        hl.addWidget(title)
+        hl.addStretch()
+        close_btn = QLabel("×")
+        close_btn.setFont(QFont("Microsoft YaHei", 14))
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; padding: 0 4px;")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        hl.addWidget(close_btn)
+        root.addWidget(header)
+
+        # Scrollable form
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        form_widget = QWidget()
+        form_widget.setStyleSheet("background: transparent;")
+        form = QVBoxLayout(form_widget)
+        form.setContentsMargins(16, 12, 16, 12)
+        form.setSpacing(10)
+
+        settings = self._preset.get("settings", {})
+        env = settings.get("env", {})
+        permissions = settings.get("permissions", {})
+        plugins = settings.get("enabledPlugins", {})
+
+        def _line(style=""):
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background: {COLORS['separator']}; border: none;{style}")
+            return line
+
+        def add_field(label_text, widget):
+            lbl = QLabel(label_text)
+            lbl.setFont(QFont("Microsoft YaHei", 9))
+            lbl.setStyleSheet(f"color: {COLORS['subtitle']};")
+            form.addWidget(lbl)
+            form.addWidget(widget)
+
+        def line_edit(text=""):
+            edit = QLineEdit()
+            edit.setText(text)
+            edit.setFont(QFont("Microsoft YaHei", 10))
+            edit.setStyleSheet(
+                f"background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+                f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px;"
+            )
+            return edit
+
+        # ── 名称 ──
+        self.name_input = line_edit(self._preset.get("name", ""))
+        add_field("名称:", self.name_input)
+
+        form.addWidget(_line())
+
+        # ── Auth / URL ──
+        self.token_input = line_edit(env.get("ANTHROPIC_AUTH_TOKEN", ""))
+        add_field("Auth Token:", self.token_input)
+
+        self.base_url_input = line_edit(env.get("ANTHROPIC_BASE_URL", ""))
+        add_field("Base URL:", self.base_url_input)
+
+        form.addWidget(_line())
+
+        # ── 模型 ──
+        self.model_input = line_edit(env.get("ANTHROPIC_MODEL", ""))
+        add_field("模型:", self.model_input)
+
+        self.sonnet_input = line_edit(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL", ""))
+        add_field("Sonnet 模型:", self.sonnet_input)
+
+        self.opus_input = line_edit(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL", ""))
+        add_field("Opus 模型:", self.opus_input)
+
+        self.haiku_input = line_edit(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", ""))
+        add_field("Haiku 模型:", self.haiku_input)
+
+        self.reasoning_input = line_edit(env.get("ANTHROPIC_REASONING_MODEL", ""))
+        add_field("Reasoning 模型:", self.reasoning_input)
+
+        form.addWidget(_line())
+
+        # ── Timeout / 权限 ──
+        self.timeout_input = line_edit(env.get("API_TIMEOUT_MS", "3000000"))
+        add_field("API Timeout (ms):", self.timeout_input)
+
+        lbl = QLabel("权限模式:")
+        lbl.setFont(QFont("Microsoft YaHei", 9))
+        lbl.setStyleSheet(f"color: {COLORS['subtitle']};")
+        form.addWidget(lbl)
+        self.permission_combo = QComboBox()
+        self.permission_combo.addItems(["bypassPermissions", "normal"])
+        self.permission_combo.setCurrentText(permissions.get("defaultMode", "bypassPermissions"))
+        self.permission_combo.setFont(QFont("Microsoft YaHei", 10))
+        self.permission_combo.setStyleSheet(
+            f"QComboBox {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px; }}"
+            f"QComboBox::drop-down {{ border: none; }}"
+            f"QComboBox QAbstractItemView {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; }}"
+        )
+        form.addWidget(self.permission_combo)
+
+        form.addWidget(_line())
+
+        # ── 插件 ──
+        self.plugins_input = QTextEdit()
+        plugin_lines = [name for name, enabled in plugins.items() if enabled]
+        self.plugins_input.setPlainText("\n".join(plugin_lines))
+        self.plugins_input.setFont(QFont("Consolas", 9))
+        self.plugins_input.setStyleSheet(
+            f"background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px;"
+        )
+        self.plugins_input.setFixedHeight(80)
+        add_field("插件 (每行一个):", self.plugins_input)
+
+        form.addWidget(_line())
+
+        # ── 其他 JSON ──
+        self.extra_input = QTextEdit()
+        extra_settings = {k: v for k, v in settings.items() if k not in ("env", "permissions", "enabledPlugins", "statusLine", "skipDangerousModePermissionPrompt")}
+        extra_env = {k: v for k, v in env.items() if k not in (
+            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_REASONING_MODEL",
+            "API_TIMEOUT_MS", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+        )}
+        if extra_env:
+            extra_settings["env"] = extra_env
+        self.extra_input.setPlainText(json.dumps(extra_settings, ensure_ascii=False, indent=2))
+        self.extra_input.setFont(QFont("Consolas", 9))
+        self.extra_input.setStyleSheet(
+            f"background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px;"
+        )
+        self.extra_input.setFixedHeight(80)
+        add_field("其他 Settings JSON:", self.extra_input)
+
+        # Save button
+        save_btn = QLabel("保存")
+        save_btn.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        save_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        save_btn.setFixedHeight(32)
+        save_btn.setStyleSheet(
+            f"background: {COLORS['header_accent']}; color: white; border-radius: 6px; padding: 4px 16px;"
+        )
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        def _on_save_click(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._do_save()
+        save_btn.mousePressEvent = _on_save_click
+        form.addWidget(save_btn)
+
+        scroll.setWidget(form_widget)
+        root.addWidget(scroll, 1)
+
+    def _do_save(self):
+        name = self.name_input.text().strip()
+        if not name:
+            return
+
+        # 从额外 JSON 开始
+        try:
+            settings = json.loads(self.extra_input.toPlainText())
+            if not isinstance(settings, dict):
+                settings = {}
+        except json.JSONDecodeError:
+            settings = {}
+
+        # env
+        env = settings.get("env", {})
+        env["ANTHROPIC_AUTH_TOKEN"] = self.token_input.text().strip()
+        env["ANTHROPIC_BASE_URL"] = self.base_url_input.text().strip()
+        if self.model_input.text().strip():
+            env["ANTHROPIC_MODEL"] = self.model_input.text().strip()
+        if self.sonnet_input.text().strip():
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.sonnet_input.text().strip()
+        if self.opus_input.text().strip():
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.opus_input.text().strip()
+        if self.haiku_input.text().strip():
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.haiku_input.text().strip()
+        if self.reasoning_input.text().strip():
+            env["ANTHROPIC_REASONING_MODEL"] = self.reasoning_input.text().strip()
+        env["API_TIMEOUT_MS"] = self.timeout_input.text().strip() or "3000000"
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        settings["env"] = env
+
+        # permissions
+        settings["permissions"] = {"defaultMode": self.permission_combo.currentText()}
+
+        # plugins
+        plugins = {}
+        for line in self.plugins_input.toPlainText().splitlines():
+            pname = line.strip()
+            if pname:
+                plugins[pname] = True
+        if plugins:
+            settings["enabledPlugins"] = plugins
+        elif "enabledPlugins" in settings:
+            del settings["enabledPlugins"]
+
+        filepath = os.path.join(os.path.expanduser("~"), ".claude", f"settings.json.{name}")
+
+        # If renaming, delete old file
+        old_filepath = self._preset.get("_filepath")
+        if old_filepath and old_filepath != filepath and os.path.exists(old_filepath):
+            os.remove(old_filepath)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+
+        preset = {
+            "name": name,
+            "cli_args": ["--allow-dangerously-skip-permissions", "--settings", filepath],
+            "settings": settings,
+            "_filepath": filepath,
+        }
+        if self._on_save:
+            self._on_save(preset)
+        self.close()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 36:
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+
+class PresetManagerWindow(QWidget):
+    def __init__(self, on_presets_changed=None, parent=None):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self._on_presets_changed = on_presets_changed
+        self._drag_pos = None
+        self.resize(300, 320)
+        self._build_ui()
+        self._center_on_parent()
+
+    def _center_on_parent(self):
+        if self.parent():
+            parent_geo = self.parent().geometry()
+            x = parent_geo.center().x() - self.width() // 2
+            y = parent_geo.center().y() - self.height() // 2
+            self.move(x, y)
+
+    def _build_ui(self):
+        self.setStyleSheet(f"background: {COLORS['window_bg']}; border-radius: 8px;")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header
+        header = QFrame()
+        header.setFixedHeight(36)
+        header.setStyleSheet(f"background: {COLORS['header_bg']}; border-bottom: 1px solid #e2e8f0;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        title = QLabel("预设管理")
+        title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        title.setStyleSheet(f"color: {COLORS['title']};")
+        hl.addWidget(title)
+        hl.addStretch()
+        close_btn = QLabel("×")
+        close_btn.setFont(QFont("Microsoft YaHei", 14))
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; padding: 0 4px;")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        hl.addWidget(close_btn)
+        root.addWidget(header)
+
+        # Preset list
+        self.list_container = QWidget()
+        self.list_container.setStyleSheet("background: transparent;")
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setContentsMargins(12, 8, 12, 8)
+        self.list_layout.setSpacing(4)
+        root.addWidget(self.list_container, 1)
+
+        # Add button
+        add_btn = QLabel("+ 添加预设")
+        add_btn.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        add_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        add_btn.setFixedHeight(32)
+        add_btn.setStyleSheet(
+            f"background: {COLORS['header_accent']}; color: white; border-radius: 6px; padding: 4px 16px;"
+        )
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        def _on_add(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._open_edit()
+        add_btn.mousePressEvent = _on_add
+        root.addWidget(add_btn)
+
+        self._refresh_list()
+
+    def _refresh_list(self):
+        while self.list_layout.count():
+            item = self.list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        presets = load_presets()
+        for idx, preset in enumerate(presets):
+            row = QFrame()
+            row.setStyleSheet(f"background: {COLORS['card_bg']}; border-radius: 6px;")
+            row.setFixedHeight(36)
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 0, 10, 0)
+            rl.setSpacing(6)
+
+            name = QLabel(preset.get("name", "未命名"))
+            name.setFont(QFont("Microsoft YaHei", 10))
+            name.setStyleSheet(f"color: {COLORS['title']}; background: transparent;")
+            rl.addWidget(name, 1)
+
+            edit_btn = QLabel("编辑")
+            edit_btn.setFont(QFont("Microsoft YaHei", 9))
+            edit_btn.setStyleSheet(f"color: {COLORS['header_accent']}; background: transparent; padding: 0 4px;")
+            edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            def _make_edit_handler(i):
+                return lambda e: self._open_edit(i) if e.button() == Qt.MouseButton.LeftButton else None
+            edit_btn.mousePressEvent = _make_edit_handler(idx)
+
+            del_btn = QLabel("删除")
+            del_btn.setFont(QFont("Microsoft YaHei", 9))
+            del_btn.setStyleSheet("color: #ef4444; background: transparent; padding: 0 4px;")
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            def _make_del_handler(i):
+                return lambda e: self._delete_preset(i) if e.button() == Qt.MouseButton.LeftButton else None
+            del_btn.mousePressEvent = _make_del_handler(idx)
+
+            rl.addWidget(edit_btn)
+            rl.addWidget(del_btn)
+            self.list_layout.addWidget(row)
+
+        self.list_layout.addStretch()
+
+    def _open_edit(self, index=None):
+        presets = load_presets()
+        preset = presets[index] if index is not None and 0 <= index < len(presets) else {"name": "", "cli_args": [], "settings": {}}
+        win = PresetEditWindow(
+            preset=preset,
+            on_save=lambda p: self._save_preset(p, index),
+            parent=self
+        )
+        win.show()
+
+    def _save_preset(self, preset, index=None):
+        self._refresh_list()
+        if self._on_presets_changed:
+            self._on_presets_changed()
+
+    def _delete_preset(self, index):
+        presets = load_presets()
+        if 0 <= index < len(presets):
+            filepath = presets[index].get("_filepath")
+            if filepath and os.path.exists(filepath):
+                os.remove(filepath)
+            self._refresh_list()
+            if self._on_presets_changed:
+                self._on_presets_changed()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 36:
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+
+class AddWorkspaceWindow(QWidget):
+    def __init__(self, on_confirm=None, parent=None):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self._on_confirm = on_confirm
+        self._drag_pos = None
+        self.resize(360, 180)
+        self._build_ui()
+        self._center_on_parent()
+
+    def _center_on_parent(self):
+        if self.parent():
+            parent_geo = self.parent().geometry()
+            x = parent_geo.center().x() - self.width() // 2
+            y = parent_geo.center().y() - self.height() // 2
+            self.move(x, y)
+
+    def _build_ui(self):
+        self.setStyleSheet(f"background: {COLORS['window_bg']}; border-radius: 8px;")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header
+        header = QFrame()
+        header.setFixedHeight(36)
+        header.setStyleSheet(f"background: {COLORS['header_bg']}; border-bottom: 1px solid #e2e8f0;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        title = QLabel("添加工作区")
+        title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        title.setStyleSheet(f"color: {COLORS['title']};")
+        hl.addWidget(title)
+        hl.addStretch()
+        close_btn = QLabel("×")
+        close_btn.setFont(QFont("Microsoft YaHei", 14))
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; padding: 0 4px;")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        hl.addWidget(close_btn)
+        root.addWidget(header)
+
+        # Form
+        form = QVBoxLayout()
+        form.setContentsMargins(16, 12, 16, 12)
+        form.setSpacing(10)
+
+        # 第一行：工作区
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+
+        lbl1 = QLabel("工作区:")
+        lbl1.setFont(QFont("Microsoft YaHei", 9))
+        lbl1.setStyleSheet(f"color: {COLORS['subtitle']};")
+        row1.addWidget(lbl1)
+
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.setEditable(True)
+        self.workspace_combo.setFont(QFont("Microsoft YaHei", 10))
+        self.workspace_combo.setStyleSheet(
+            f"QComboBox {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px; }}"
+            f"QComboBox::drop-down {{ border: none; }}"
+            f"QComboBox QAbstractItemView {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; }}"
+        )
+        for ws in load_history():
+            self.workspace_combo.addItem(ws)
+        row1.addWidget(self.workspace_combo, 1)
+
+        browse_btn = QLabel("浏览")
+        browse_btn.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        browse_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        browse_btn.setFixedHeight(28)
+        browse_btn.setFixedWidth(48)
+        browse_btn.setStyleSheet(
+            f"background: {COLORS['header_accent']}; color: white; border-radius: 4px; padding: 4px 8px;"
+        )
+        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        def _on_browse(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                from PySide6.QtWidgets import QFileDialog
+                folder = QFileDialog.getExistingDirectory(self, "选择项目文件夹")
+                if folder:
+                    self.workspace_combo.setCurrentText(folder)
+        browse_btn.mousePressEvent = _on_browse
+        row1.addWidget(browse_btn)
+
+        form.addLayout(row1)
+
+        # 第二行：预设
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+
+        lbl2 = QLabel("预设:")
+        lbl2.setFont(QFont("Microsoft YaHei", 9))
+        lbl2.setStyleSheet(f"color: {COLORS['subtitle']};")
+        row2.addWidget(lbl2)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setFont(QFont("Microsoft YaHei", 10))
+        self.preset_combo.setStyleSheet(
+            f"QComboBox {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 4px; padding: 6px; }}"
+            f"QComboBox::drop-down {{ border: none; }}"
+            f"QComboBox QAbstractItemView {{ background: {COLORS['card_bg']}; color: {COLORS['title']}; }}"
+        )
+        presets = load_presets()
+        for p in presets:
+            self.preset_combo.addItem(p["name"])
+        row2.addWidget(self.preset_combo, 1)
+
+        form.addLayout(row2)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        cancel_btn = QLabel("取消")
+        cancel_btn.setFont(QFont("Microsoft YaHei", 10))
+        cancel_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cancel_btn.setFixedHeight(32)
+        cancel_btn.setFixedWidth(64)
+        cancel_btn.setStyleSheet(
+            f"background: {COLORS['card_bg']}; color: {COLORS['title']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 6px; padding: 4px 12px;"
+        )
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        btn_row.addWidget(cancel_btn)
+
+        ok_btn = QLabel("确定")
+        ok_btn.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        ok_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ok_btn.setFixedHeight(32)
+        ok_btn.setFixedWidth(64)
+        ok_btn.setStyleSheet(
+            f"background: {COLORS['header_accent']}; color: white; border-radius: 6px; padding: 4px 12px;"
+        )
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        def _on_ok(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._do_confirm()
+        ok_btn.mousePressEvent = _on_ok
+        btn_row.addWidget(ok_btn)
+
+        form.addLayout(btn_row)
+
+        root.addLayout(form)
+
+    def _do_confirm(self):
+        folder = self.workspace_combo.currentText().strip()
+        if not folder:
+            return
+        preset_name = self.preset_combo.currentText()
+        presets = load_presets()
+        preset = next((p for p in presets if p["name"] == preset_name), None)
+        if preset is None:
+            return
+
+        # Save history
+        history = load_history()
+        if folder in history:
+            history.remove(folder)
+        history.insert(0, folder)
+        history = history[:20]
+        save_history(history)
+
+        if self._on_confirm:
+            self._on_confirm(folder, preset)
+        self.close()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 36:
@@ -519,6 +1187,14 @@ class MonitorWindow(QWidget):
             f"color: {COLORS['status_text']}; background: transparent; border: none;"
         )
         header_layout.addWidget(self.status_label)
+
+        # 设置按钮
+        settings_btn = QLabel("⚙")
+        settings_btn.setFont(QFont("Microsoft YaHei", 11))
+        settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_btn.setStyleSheet(f"color: {COLORS['status_text']}; background: transparent; border: none; padding: 0 4px;")
+        settings_btn.mousePressEvent = lambda e: self._show_preset_manager() if e.button() == Qt.MouseButton.LeftButton else None
+        header_layout.addWidget(settings_btn)
 
         # 添加按钮
         add_btn = QLabel("+")
@@ -710,15 +1386,26 @@ class MonitorWindow(QWidget):
         new_mode = ViewMode.DETAIL if self._view_mode == ViewMode.COMPACT else ViewMode.COMPACT
         self._set_view_mode(new_mode)
 
+    def _show_preset_manager(self):
+        win = PresetManagerWindow(parent=self)
+        win.show()
+
     def _on_add_new(self):
-        from PySide6.QtWidgets import QFileDialog
-        folder = QFileDialog.getExistingDirectory(self, "选择项目文件夹")
-        if folder:
+        def _on_confirm(folder, preset):
+            args = list(preset["cli_args"])
             import subprocess
+            if args:
+                quoted = " ".join(f"'{a}'" for a in args)
+                cmd = f"Set-Location '{folder}'; claude {quoted}"
+            else:
+                cmd = f"Set-Location '{folder}'; claude"
             subprocess.Popen(
-                ["powershell.exe", "-NoExit", "-Command", f"Set-Location '{folder}'; claude"],
+                ["pwsh.exe", "-NoExit", "-Command", cmd],
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
+
+        win = AddWorkspaceWindow(on_confirm=_on_confirm, parent=self)
+        win.show()
 
     def _locate_window(self, pid: int):
         import ctypes
