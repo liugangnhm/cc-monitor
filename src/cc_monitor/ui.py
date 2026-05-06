@@ -670,11 +670,11 @@ class MonitorWindow(QWidget):
         self.toggle_btn.setText("⊞" if mode == ViewMode.COMPACT else "≡")
 
         if mode == ViewMode.COMPACT:
-            self.resize(260, 360)
             self.setMinimumSize(200, 180)
+            self.resize(260, 360)
         else:
-            self.resize(1100, 700)
             self.setMinimumSize(500, 400)
+            self.resize(1100, 700)
 
         sessions = load_sessions()
         self._rebuild_ui(sessions)
@@ -688,7 +688,7 @@ class MonitorWindow(QWidget):
                 self._clear_layout(item.layout())
 
         # 清除详细模式下残留的列拉伸设置，防止紧凑模式宽度异常
-        for col in range(self.grid_layout.columnCount() + 1):
+        for col in range(20):
             self.grid_layout.setColumnStretch(col, 0)
 
         if not sessions:
