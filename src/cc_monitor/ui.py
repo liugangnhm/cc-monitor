@@ -687,6 +687,10 @@ class MonitorWindow(QWidget):
             elif item.layout():
                 self._clear_layout(item.layout())
 
+        # 清除详细模式下残留的列拉伸设置，防止紧凑模式宽度异常
+        for col in range(self.grid_layout.columnCount() + 1):
+            self.grid_layout.setColumnStretch(col, 0)
+
         if not sessions:
             empty = QLabel("未检测到活跃 Session")
             empty.setFont(QFont("Microsoft YaHei", 12))
