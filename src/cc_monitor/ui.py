@@ -360,7 +360,7 @@ class MonitorWindow(QWidget):
         root.addWidget(self.scroll)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 43:
             self._drag_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 
