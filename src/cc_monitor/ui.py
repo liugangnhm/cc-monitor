@@ -98,19 +98,19 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
 
     # Shadow on card
     shadow = QGraphicsDropShadowEffect(card)
-    shadow.setBlurRadius(16)
+    shadow.setBlurRadius(8)
     shadow.setXOffset(0)
-    shadow.setYOffset(3)
-    shadow.setColor(QColor(0, 0, 0, 20))
+    shadow.setYOffset(2)
+    shadow.setColor(QColor(0, 0, 0, 15))
     card.setGraphicsEffect(shadow)
 
     body = QVBoxLayout(card)
-    body.setContentsMargins(18, 16, 18, 16)
-    body.setSpacing(10)
+    body.setContentsMargins(12, 10, 12, 10)
+    body.setSpacing(6)
 
     # ── Header row ──
     header = QHBoxLayout()
-    header.setSpacing(10)
+    header.setSpacing(6)
 
     project_name = session.name or ""
     if not project_name and session.cwd:
@@ -196,7 +196,7 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
 
 def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False) -> QFrame:
     row = QFrame()
-    row.setFixedHeight(36)
+    row.setFixedHeight(28)
     bg_color = "#fef9c3" if blinking and blink_phase else "transparent"
     row.setStyleSheet(f"QFrame {{ background: {bg_color}; border: none; }}")
 
@@ -354,8 +354,8 @@ class MonitorWindow(QWidget):
         self.grid_container = QWidget()
         self.grid_container.setStyleSheet("background: transparent;")
         self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setSpacing(16)
-        self.grid_layout.setContentsMargins(24, 20, 24, 20)
+        self.grid_layout.setSpacing(4)
+        self.grid_layout.setContentsMargins(12, 8, 12, 8)
 
         self.scroll.setWidget(self.grid_container)
         root.addWidget(self.scroll)
