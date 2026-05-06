@@ -1,6 +1,5 @@
 """Claude Code Monitor GUI with PySide6."""
 
-from datetime import datetime
 from enum import Enum
 
 from PySide6.QtCore import Qt, QTimer
@@ -401,8 +400,8 @@ class MonitorWindow(QWidget):
         sessions = load_sessions()
         sig = self._session_sig(sessions)
 
-        now = datetime.now().strftime("%H:%M:%S")
-        self.status_label.setText(f"刷新 {now}  ·  {len(sessions)} 会话")
+        total_tasks = sum(len(s.tasks) for s in sessions)
+        self.status_label.setText(f"{total_tasks} 任务")
 
         if sig == self._last_sig:
             return
