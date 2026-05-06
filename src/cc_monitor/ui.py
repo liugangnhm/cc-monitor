@@ -253,8 +253,8 @@ class MonitorWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Window
         )
-        self.resize(300, 400)
-        self.setMinimumSize(240, 200)
+        self.resize(260, 360)
+        self.setMinimumSize(200, 180)
 
         self._last_sig: str = ""
         self._last_sessions: list[Session] = []
@@ -307,7 +307,7 @@ class MonitorWindow(QWidget):
         )
 
         header_layout = QHBoxLayout(header_bar)
-        header_layout.setContentsMargins(24, 0, 24, 0)
+        header_layout.setContentsMargins(12, 0, 12, 0)
 
         title = QLabel("CCM")
         title.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
@@ -357,8 +357,8 @@ class MonitorWindow(QWidget):
         self.grid_container = QWidget()
         self.grid_container.setStyleSheet("background: transparent;")
         self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setSpacing(4)
-        self.grid_layout.setContentsMargins(12, 8, 12, 8)
+        self.grid_layout.setSpacing(2)
+        self.grid_layout.setContentsMargins(6, 4, 6, 4)
 
         self.scroll.setWidget(self.grid_container)
         root.addWidget(self.scroll)
@@ -475,8 +475,8 @@ class MonitorWindow(QWidget):
         self.toggle_btn.setText("⊞" if mode == ViewMode.COMPACT else "≡")
 
         if mode == ViewMode.COMPACT:
-            self.resize(300, 400)
-            self.setMinimumSize(240, 200)
+            self.resize(260, 360)
+            self.setMinimumSize(200, 180)
         else:
             self.resize(1100, 700)
             self.setMinimumSize(500, 400)
