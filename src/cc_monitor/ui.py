@@ -64,7 +64,7 @@ class ViewMode(Enum):
     DETAIL = "detail"
 
 
-def _make_card(session: Session) -> QFrame:
+def _make_card(session: Session, blinking: bool = False, blink_phase: bool = False) -> QFrame:
     outer = QFrame()
     outer.setStyleSheet("QFrame { background: transparent; border: none; }")
 
@@ -89,9 +89,10 @@ def _make_card(session: Session) -> QFrame:
     outer_layout.addWidget(strip)
 
     # Main card body
+    card_bg = "#fef9c3" if blinking and blink_phase else COLORS["card_bg"]
     card = QFrame()
     card.setStyleSheet(
-        f"QFrame {{ background: {COLORS['card_bg']}; border: none; "
+        f"QFrame {{ background: {card_bg}; border: none; "
         f"border-radius: 0 10px 10px 0; }}"
     )
 
@@ -193,10 +194,11 @@ def _make_card(session: Session) -> QFrame:
     return outer
 
 
-def _make_compact_row(session: Session) -> QFrame:
+def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False) -> QFrame:
     row = QFrame()
     row.setFixedHeight(36)
-    row.setStyleSheet("QFrame { background: transparent; border: none; }")
+    bg_color = "#fef9c3" if blinking and blink_phase else "transparent"
+    row.setStyleSheet(f"QFrame {{ background: {bg_color}; border: none; }}")
 
     if session.is_alive and session.status == "busy":
         accent = COLORS["accent_busy"]
@@ -256,8 +258,11 @@ class MonitorWindow(QWidget):
         self.setMinimumSize(240, 200)
 
         self._last_sig: str = ""
+        self._last_sessions: list[Session] = []
         self._drag_pos = None
         self._view_mode = ViewMode.COMPACT
+        self._changed_sessions: set[str] = set()
+        self._blink_phase = False
         self._build_ui()
         self._start_timer()
 
@@ -265,6 +270,9 @@ class MonitorWindow(QWidget):
         self._opacity_timer.setSingleShot(True)
         self._opacity_timer.timeout.connect(lambda: self.setWindowOpacity(0.3))
         self.setWindowOpacity(0.3)
+
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._toggle_blink)
 
         self.refresh()
         self._set_view_mode(ViewMode.COMPACT)
@@ -406,10 +414,37 @@ class MonitorWindow(QWidget):
         if sig == self._last_sig:
             return
 
+        # 检测哪些 session 发生了变化
+        old_map = {s.session_id: s for s in self._last_sessions}
+        for s in sessions:
+            old = old_map.get(s.session_id)
+            if old is None:
+                self._changed_sessions.add(s.session_id)
+            elif s.status != old.status or s.is_alive != old.is_alive or len(s.tasks) != len(old.tasks):
+                self._changed_sessions.add(s.session_id)
+
+        self._last_sessions = sessions
+        self._last_sig = sig
+
         self.setWindowOpacity(1.0)
         self._opacity_timer.stop()
         self._opacity_timer.start(3000)
-        self._last_sig = sig
+
+        self._rebuild_ui(sessions)
+
+        if self._changed_sessions and not self._blink_timer.isActive():
+            self._blink_timer.start(500)
+
+    def _toggle_blink(self):
+        self._blink_phase = not self._blink_phase
+        sessions = load_sessions()
+        self._rebuild_ui(sessions)
+
+    def _acknowledge_change(self, session_id: str):
+        self._changed_sessions.discard(session_id)
+        if not self._changed_sessions:
+            self._blink_timer.stop()
+        sessions = load_sessions()
         self._rebuild_ui(sessions)
 
     def _set_view_mode(self, mode: ViewMode):
@@ -452,7 +487,10 @@ class MonitorWindow(QWidget):
 
         if self._view_mode == ViewMode.COMPACT:
             for i, session in enumerate(sessions):
-                row = _make_compact_row(session)
+                blinking = session.session_id in self._changed_sessions
+                row = _make_compact_row(session, blinking, self._blink_phase)
+                if blinking:
+                    row.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
                 self.grid_layout.addWidget(row, i, 0)
         else:
             width = self.scroll.viewport().width() - 48
@@ -460,7 +498,10 @@ class MonitorWindow(QWidget):
             for i, session in enumerate(sessions):
                 row = i // cols
                 col = i % cols
-                card = _make_card(session)
+                blinking = session.session_id in self._changed_sessions
+                card = _make_card(session, blinking, self._blink_phase)
+                if blinking:
+                    card.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
                 self.grid_layout.addWidget(card, row, col)
             for col in range(cols):
                 self.grid_layout.setColumnStretch(col, 1)
