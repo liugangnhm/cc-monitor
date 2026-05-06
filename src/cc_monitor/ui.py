@@ -251,6 +251,146 @@ def _make_compact_row(session: Session, blinking: bool = False, blink_phase: boo
     return row
 
 
+class SessionDetailWindow(QWidget):
+    def __init__(self, session: Session, on_acknowledge=None, parent=None):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.session = session
+        self._on_acknowledge = on_acknowledge
+        self._drag_pos = None
+        self.resize(280, 360)
+        self._build_ui()
+        self._center_on_parent()
+
+    def _center_on_parent(self):
+        if self.parent():
+            parent_geo = self.parent().geometry()
+            x = parent_geo.center().x() - self.width() // 2
+            y = parent_geo.center().y() - self.height() // 2
+            self.move(x, y)
+
+    def _build_ui(self):
+        self.setStyleSheet(f"background: {COLORS['window_bg']}; border-radius: 8px;")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header
+        header = QFrame()
+        header.setFixedHeight(36)
+        header.setStyleSheet(f"background: {COLORS['header_bg']}; border-bottom: 1px solid #e2e8f0;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+
+        project_name = self.session.name or ""
+        if not project_name and self.session.cwd:
+            import os
+            project_name = os.path.basename(self.session.cwd) or "Unknown"
+
+        title = QLabel(project_name)
+        title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        title.setStyleSheet(f"color: {COLORS['title']};")
+        hl.addWidget(title)
+        hl.addStretch()
+
+        close_btn = QLabel("×")
+        close_btn.setFont(QFont("Microsoft YaHei", 14))
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; padding: 0 4px;")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        hl.addWidget(close_btn)
+
+        root.addWidget(header)
+
+        # Content
+        content = QVBoxLayout()
+        content.setContentsMargins(16, 12, 16, 12)
+        content.setSpacing(8)
+
+        def add_field(label_text, value_text):
+            row = QHBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setFont(QFont("Microsoft YaHei", 9))
+            lbl.setStyleSheet(f"color: {COLORS['subtitle']};")
+            val = QLabel(value_text)
+            val.setFont(QFont("Microsoft YaHei", 9))
+            val.setStyleSheet(f"color: {COLORS['title']};")
+            val.setWordWrap(True)
+            row.addWidget(lbl)
+            row.addWidget(val, 1)
+            content.addLayout(row)
+
+        add_field("Session ID:", self.session.session_id[:16] + "...")
+        add_field("PID:", str(self.session.pid))
+        add_field("目录:", self.session.cwd)
+        status_label = "工作中" if self.session.status == "busy" else "就绪" if self.session.status == "idle" else self.session.status
+        add_field("状态:", status_label)
+        add_field("存活:", "是" if self.session.is_alive else "否")
+
+        # Tasks
+        if self.session.tasks:
+            sep = QFrame()
+            sep.setFixedHeight(1)
+            sep.setStyleSheet(f"background: {COLORS['separator']};")
+            content.addWidget(sep)
+
+            tasks_title = QLabel(f"任务 ({len(self.session.tasks)})")
+            tasks_title.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+            tasks_title.setStyleSheet(f"color: {COLORS['title']};")
+            content.addWidget(tasks_title)
+
+            for task in self.session.tasks:
+                ts = TASK_STYLES.get(task.status, TASK_STYLES["pending"])
+                row = QHBoxLayout()
+                dot = QLabel()
+                dot.setFixedSize(6, 6)
+                dot.setStyleSheet(f"background: {ts['dot']}; border-radius: 3px;")
+                row.addWidget(dot)
+                text = QLabel(task.subject)
+                text.setFont(QFont("Microsoft YaHei", 9))
+                text.setStyleSheet(f"color: {ts['text']};")
+                text.setWordWrap(True)
+                row.addWidget(text, 1)
+                content.addLayout(row)
+
+        # Acknowledge button
+        if self._on_acknowledge:
+            content.addSpacing(8)
+            btn = QLabel("确认变化")
+            btn.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+            btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            btn.setFixedHeight(32)
+            btn.setStyleSheet(
+                f"background: {COLORS['header_accent']}; color: white; "
+                f"border-radius: 6px; padding: 4px 16px;"
+            )
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            def _on_btn_click(event):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._on_acknowledge(self.session.session_id)
+                    self.close()
+            btn.mousePressEvent = _on_btn_click
+            content.addWidget(btn)
+
+        root.addLayout(content)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 36:
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+
 class MonitorWindow(QWidget):
     REFRESH_MS = 2000
     CARD_MIN_WIDTH = 300
@@ -287,6 +427,11 @@ class MonitorWindow(QWidget):
 
         self._flash_timer = QTimer(self)
         self._flash_timer.timeout.connect(self._do_flash)
+
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._on_click_timeout)
+        self._click_session = None
 
         self.refresh()
         self._set_view_mode(ViewMode.COMPACT)
@@ -478,6 +623,36 @@ class MonitorWindow(QWidget):
         sessions = load_sessions()
         self._rebuild_ui(sessions)
 
+    def _make_row_click_handler(self, session):
+        def handler(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._click_session = session
+                self._click_timer.start(250)
+                event.accept()
+        return handler
+
+    def _make_row_double_click_handler(self, session_id):
+        def handler(event):
+            self._click_timer.stop()
+            self._click_session = None
+            self._acknowledge_change(session_id)
+            event.accept()
+        return handler
+
+    def _on_click_timeout(self):
+        if self._click_session:
+            self._show_session_detail(self._click_session)
+            self._click_session = None
+
+    def _show_session_detail(self, session: Session):
+        is_blinking = session.session_id in self._changed_sessions or session.session_id in self._new_sessions
+        win = SessionDetailWindow(
+            session,
+            on_acknowledge=self._acknowledge_change if is_blinking else None,
+            parent=self
+        )
+        win.show()
+
     def _toggle_view_mode(self):
         new_mode = ViewMode.DETAIL if self._view_mode == ViewMode.COMPACT else ViewMode.COMPACT
         self._set_view_mode(new_mode)
@@ -523,8 +698,9 @@ class MonitorWindow(QWidget):
                 is_new = session.session_id in self._new_sessions
                 blinking = session.session_id in self._changed_sessions or is_new
                 row = _make_compact_row(session, blinking, self._blink_phase, is_new)
+                row.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
-                    row.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
+                    row.mouseDoubleClickEvent = self._make_row_double_click_handler(session.session_id)
                 self.grid_layout.addWidget(row, i, 0)
         else:
             width = self.scroll.viewport().width() - 48
@@ -535,8 +711,9 @@ class MonitorWindow(QWidget):
                 is_new = session.session_id in self._new_sessions
                 blinking = session.session_id in self._changed_sessions or is_new
                 card = _make_card(session, blinking, self._blink_phase, is_new)
+                card.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
-                    card.mouseDoubleClickEvent = lambda e, sid=session.session_id: self._acknowledge_change(sid)
+                    card.mouseDoubleClickEvent = self._make_row_double_click_handler(session.session_id)
                 self.grid_layout.addWidget(card, row, col)
             for col in range(cols):
                 self.grid_layout.setColumnStretch(col, 1)
