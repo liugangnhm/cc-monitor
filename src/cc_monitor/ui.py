@@ -321,21 +321,14 @@ class MonitorWindow(QWidget):
         )
         header_layout.addWidget(self.status_label)
 
-        # 视图切换按钮
-        self.compact_btn = QLabel("≡")
-        self.compact_btn.setFont(QFont("Microsoft YaHei", 12))
-        self.compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.compact_btn.setStyleSheet("color: #6366f1; background: transparent; border: none; padding: 0 6px;")
-        self.compact_btn.mousePressEvent = lambda e: self._set_view_mode(ViewMode.COMPACT) if e.button() == Qt.MouseButton.LeftButton else None
+        # 视图切换按钮（合二为一）
+        self.toggle_btn = QLabel("⊞")
+        self.toggle_btn.setFont(QFont("Microsoft YaHei", 12))
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setStyleSheet(f"color: {COLORS['header_accent']}; background: transparent; border: none; padding: 0 6px;")
+        self.toggle_btn.mousePressEvent = lambda e: self._toggle_view_mode() if e.button() == Qt.MouseButton.LeftButton else None
 
-        self.detail_btn = QLabel("⊞")
-        self.detail_btn.setFont(QFont("Microsoft YaHei", 12))
-        self.detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.detail_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; padding: 0 6px;")
-        self.detail_btn.mousePressEvent = lambda e: self._set_view_mode(ViewMode.DETAIL) if e.button() == Qt.MouseButton.LeftButton else None
-
-        header_layout.addWidget(self.compact_btn)
-        header_layout.addWidget(self.detail_btn)
+        header_layout.addWidget(self.toggle_btn)
 
         # 关闭按钮
         close_btn = QLabel("×")
@@ -448,15 +441,17 @@ class MonitorWindow(QWidget):
         sessions = load_sessions()
         self._rebuild_ui(sessions)
 
+    def _toggle_view_mode(self):
+        new_mode = ViewMode.DETAIL if self._view_mode == ViewMode.COMPACT else ViewMode.COMPACT
+        self._set_view_mode(new_mode)
+
     def _set_view_mode(self, mode: ViewMode):
         if self._view_mode == mode:
             return
         self._view_mode = mode
 
-        active_color = COLORS["header_accent"]
-        inactive_color = COLORS["subtitle"]
-        self.compact_btn.setStyleSheet(f"color: {active_color if mode == ViewMode.COMPACT else inactive_color}; background: transparent; border: none; padding: 0 6px;")
-        self.detail_btn.setStyleSheet(f"color: {active_color if mode == ViewMode.DETAIL else inactive_color}; background: transparent; border: none; padding: 0 6px;")
+        # 按钮显示要切换到的目标模式图标
+        self.toggle_btn.setText("⊞" if mode == ViewMode.COMPACT else "≡")
 
         if mode == ViewMode.COMPACT:
             self.resize(300, 400)
