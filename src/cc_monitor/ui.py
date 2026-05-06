@@ -1,6 +1,7 @@
 """Claude Code Monitor GUI with PySide6."""
 
 from datetime import datetime
+from enum import Enum
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPalette
@@ -56,6 +57,11 @@ SESSION_BADGE = {
     "busy": {"label": "工作中", "bg": COLORS["badge_busy_bg"], "color": COLORS["badge_busy_text"]},
     "idle": {"label": "就绪",   "bg": COLORS["badge_idle_bg"], "color": COLORS["badge_idle_text"]},
 }
+
+
+class ViewMode(Enum):
+    COMPACT = "compact"
+    DETAIL = "detail"
 
 
 def _make_card(session: Session) -> QFrame:
@@ -187,6 +193,53 @@ def _make_card(session: Session) -> QFrame:
     return outer
 
 
+def _make_compact_row(session: Session) -> QFrame:
+    row = QFrame()
+    row.setFixedHeight(36)
+    row.setStyleSheet("QFrame { background: transparent; border: none; }")
+
+    if session.is_alive and session.status == "busy":
+        accent = COLORS["accent_busy"]
+    elif session.is_alive:
+        accent = COLORS["accent_idle"]
+    else:
+        accent = COLORS["accent_dead"]
+
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+
+    strip = QFrame()
+    strip.setFixedWidth(4)
+    strip.setStyleSheet(f"QFrame {{ background: {accent}; border: none; border-radius: 2px; }}")
+    layout.addWidget(strip)
+    layout.addSpacing(10)
+
+    project_name = session.name or ""
+    if not project_name and session.cwd:
+        import os
+        project_name = os.path.basename(session.cwd) or "Unknown"
+
+    name = QLabel(project_name)
+    name.setFont(QFont("Microsoft YaHei", 10))
+    name.setStyleSheet(f"color: {COLORS['title']}; background: transparent; border: none;")
+    layout.addWidget(name, 1)
+
+    if session.is_alive:
+        badge_style = SESSION_BADGE.get(session.status, SESSION_BADGE["idle"])
+        task_count = len(session.tasks)
+        status_text = f"{badge_style['label']} [{task_count}]"
+    else:
+        status_text = "已结束 [0]"
+
+    status = QLabel(status_text)
+    status.setFont(QFont("Microsoft YaHei", 9))
+    status.setStyleSheet(f"color: {COLORS['status_text']}; background: transparent; border: none;")
+    layout.addWidget(status)
+
+    return row
+
+
 class MonitorWindow(QWidget):
     REFRESH_MS = 2000
     CARD_MIN_WIDTH = 300
@@ -195,18 +248,26 @@ class MonitorWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Claude Code Monitor")
         self.setWindowFlags(
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Window
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowMinimizeButtonHint
         )
-        self.resize(1100, 700)
-        self.setMinimumSize(500, 400)
+        self.resize(300, 400)
+        self.setMinimumSize(240, 200)
 
         self._last_sig: str = ""
+        self._drag_pos = None
+        self._view_mode = ViewMode.COMPACT
         self._build_ui()
         self._start_timer()
+
+        self._opacity_timer = QTimer(self)
+        self._opacity_timer.setSingleShot(True)
+        self._opacity_timer.timeout.connect(lambda: self.setWindowOpacity(0.3))
+        self.setWindowOpacity(0.3)
+
         self.refresh()
+        self._set_view_mode(ViewMode.COMPACT)
 
     def _build_ui(self):
         self.setStyleSheet(f"background: {COLORS['window_bg']};")
@@ -228,7 +289,7 @@ class MonitorWindow(QWidget):
 
         # ── Top header bar ──
         header_bar = QFrame()
-        header_bar.setFixedHeight(52)
+        header_bar.setFixedHeight(40)
         header_bar.setStyleSheet(
             f"QFrame {{ background: {COLORS['header_bg']}; "
             f"border-bottom: 1px solid #e2e8f0; }}"
@@ -251,6 +312,31 @@ class MonitorWindow(QWidget):
             f"color: {COLORS['status_text']}; background: transparent; border: none;"
         )
         header_layout.addWidget(self.status_label)
+
+        # 视图切换按钮
+        self.compact_btn = QLabel("≡")
+        self.compact_btn.setFont(QFont("Microsoft YaHei", 12))
+        self.compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.compact_btn.setStyleSheet("color: #6366f1; background: transparent; border: none; padding: 0 6px;")
+        self.compact_btn.mousePressEvent = lambda e: self._set_view_mode(ViewMode.COMPACT) if e.button() == Qt.MouseButton.LeftButton else None
+
+        self.detail_btn = QLabel("⊞")
+        self.detail_btn.setFont(QFont("Microsoft YaHei", 12))
+        self.detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.detail_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; padding: 0 6px;")
+        self.detail_btn.mousePressEvent = lambda e: self._set_view_mode(ViewMode.DETAIL) if e.button() == Qt.MouseButton.LeftButton else None
+
+        header_layout.addWidget(self.compact_btn)
+        header_layout.addWidget(self.detail_btn)
+
+        # 关闭按钮
+        close_btn = QLabel("×")
+        close_btn.setFont(QFont("Microsoft YaHei", 14))
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; padding: 0 8px;")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.mousePressEvent = lambda e: self.close() if e.button() == Qt.MouseButton.LeftButton else None
+        header_layout.addWidget(close_btn)
+
         root.addWidget(header_bar)
 
         # ── Card grid area ──
@@ -272,6 +358,31 @@ class MonitorWindow(QWidget):
 
         self.scroll.setWidget(self.grid_container)
         root.addWidget(self.scroll)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        self.setWindowOpacity(1.0)
+        self._opacity_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._opacity_timer.start(500)
+        super().leaveEvent(event)
 
     def _start_timer(self):
         self.timer = QTimer(self)
@@ -295,10 +406,33 @@ class MonitorWindow(QWidget):
         if sig == self._last_sig:
             return
 
+        self.setWindowOpacity(1.0)
+        self._opacity_timer.stop()
+        self._opacity_timer.start(3000)
         self._last_sig = sig
-        self._rebuild_cards(sessions)
+        self._rebuild_ui(sessions)
 
-    def _rebuild_cards(self, sessions: list[Session]):
+    def _set_view_mode(self, mode: ViewMode):
+        if self._view_mode == mode:
+            return
+        self._view_mode = mode
+
+        active_color = COLORS["header_accent"]
+        inactive_color = COLORS["subtitle"]
+        self.compact_btn.setStyleSheet(f"color: {active_color if mode == ViewMode.COMPACT else inactive_color}; background: transparent; border: none; padding: 0 6px;")
+        self.detail_btn.setStyleSheet(f"color: {active_color if mode == ViewMode.DETAIL else inactive_color}; background: transparent; border: none; padding: 0 6px;")
+
+        if mode == ViewMode.COMPACT:
+            self.resize(300, 400)
+            self.setMinimumSize(240, 200)
+        else:
+            self.resize(1100, 700)
+            self.setMinimumSize(500, 400)
+
+        sessions = load_sessions()
+        self._rebuild_ui(sessions)
+
+    def _rebuild_ui(self, sessions: list[Session]):
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
@@ -316,17 +450,20 @@ class MonitorWindow(QWidget):
             self.grid_layout.addWidget(empty, 0, 0)
             return
 
-        width = self.scroll.viewport().width() - 48
-        cols = max(1, width // self.CARD_MIN_WIDTH)
-
-        for i, session in enumerate(sessions):
-            row = i // cols
-            col = i % cols
-            card = _make_card(session)
-            self.grid_layout.addWidget(card, row, col)
-
-        for col in range(cols):
-            self.grid_layout.setColumnStretch(col, 1)
+        if self._view_mode == ViewMode.COMPACT:
+            for i, session in enumerate(sessions):
+                row = _make_compact_row(session)
+                self.grid_layout.addWidget(row, i, 0)
+        else:
+            width = self.scroll.viewport().width() - 48
+            cols = max(1, width // self.CARD_MIN_WIDTH)
+            for i, session in enumerate(sessions):
+                row = i // cols
+                col = i % cols
+                card = _make_card(session)
+                self.grid_layout.addWidget(card, row, col)
+            for col in range(cols):
+                self.grid_layout.setColumnStretch(col, 1)
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -338,6 +475,6 @@ class MonitorWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "_last_sig") and self._last_sig:
+        if hasattr(self, "_last_sig") and self._last_sig and self._view_mode == ViewMode.DETAIL:
             sessions = load_sessions()
-            self._rebuild_cards(sessions)
+            self._rebuild_ui(sessions)
