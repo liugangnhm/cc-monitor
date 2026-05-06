@@ -631,17 +631,17 @@ class MonitorWindow(QWidget):
                 event.accept()
         return handler
 
-    def _make_row_double_click_handler(self, session_id):
+    def _make_row_double_click_handler(self, session):
         def handler(event):
             self._click_timer.stop()
             self._click_session = None
-            self._acknowledge_change(session_id)
+            self._show_session_detail(session)
             event.accept()
         return handler
 
     def _on_click_timeout(self):
         if self._click_session:
-            self._show_session_detail(self._click_session)
+            self._acknowledge_change(self._click_session.session_id)
             self._click_session = None
 
     def _show_session_detail(self, session: Session):
@@ -700,7 +700,7 @@ class MonitorWindow(QWidget):
                 row = _make_compact_row(session, blinking, self._blink_phase, is_new)
                 row.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
-                    row.mouseDoubleClickEvent = self._make_row_double_click_handler(session.session_id)
+                    row.mouseDoubleClickEvent = self._make_row_double_click_handler(session)
                 self.grid_layout.addWidget(row, i, 0)
         else:
             width = self.scroll.viewport().width() - 48
@@ -713,7 +713,7 @@ class MonitorWindow(QWidget):
                 card = _make_card(session, blinking, self._blink_phase, is_new)
                 card.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
-                    card.mouseDoubleClickEvent = self._make_row_double_click_handler(session.session_id)
+                    card.mouseDoubleClickEvent = self._make_row_double_click_handler(session)
                 self.grid_layout.addWidget(card, row, col)
             for col in range(cols):
                 self.grid_layout.setColumnStretch(col, 1)
