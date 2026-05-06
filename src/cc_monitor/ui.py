@@ -364,6 +364,8 @@ class MonitorWindow(QWidget):
         root.addWidget(self.scroll)
 
     def mousePressEvent(self, event):
+        if self._flash_timer.isActive():
+            self._stop_flash()
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 43:
             self._drag_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
@@ -390,13 +392,15 @@ class MonitorWindow(QWidget):
             self._opacity_timer.start(500)
         super().leaveEvent(event)
 
+    def _stop_flash(self):
+        self._flash_timer.stop()
+        if not self.underMouse():
+            self.setWindowOpacity(0.3)
+        else:
+            self.setWindowOpacity(1.0)
+
     def _do_flash(self):
         self._flash_count += 1
-        if self._flash_count >= 8:
-            self._flash_timer.stop()
-            if not self.underMouse():
-                self.setWindowOpacity(0.3)
-            return
         opacity = 0.35 if self._flash_count % 2 == 1 else 1.0
         self.setWindowOpacity(opacity)
 
