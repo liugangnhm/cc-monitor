@@ -247,7 +247,7 @@ class MonitorWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Claude Code Monitor")
+        self.setWindowTitle("CCM")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -262,6 +262,7 @@ class MonitorWindow(QWidget):
         self._view_mode = ViewMode.COMPACT
         self._changed_sessions: set[str] = set()
         self._blink_phase = False
+        self._flash_count = 0
         self._build_ui()
         self._start_timer()
 
@@ -272,6 +273,9 @@ class MonitorWindow(QWidget):
 
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_blink)
+
+        self._flash_timer = QTimer(self)
+        self._flash_timer.timeout.connect(self._do_flash)
 
         self.refresh()
         self._set_view_mode(ViewMode.COMPACT)
@@ -305,7 +309,7 @@ class MonitorWindow(QWidget):
         header_layout = QHBoxLayout(header_bar)
         header_layout.setContentsMargins(24, 0, 24, 0)
 
-        title = QLabel("Claude Code Monitor")
+        title = QLabel("CCM")
         title.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
         title.setStyleSheet(
             f"color: {COLORS['header_title']}; background: transparent; border: none;"
@@ -376,13 +380,25 @@ class MonitorWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     def enterEvent(self, event):
-        self.setWindowOpacity(1.0)
-        self._opacity_timer.stop()
+        if not self._flash_timer.isActive():
+            self.setWindowOpacity(1.0)
+            self._opacity_timer.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._opacity_timer.start(500)
+        if not self._flash_timer.isActive():
+            self._opacity_timer.start(500)
         super().leaveEvent(event)
+
+    def _do_flash(self):
+        self._flash_count += 1
+        if self._flash_count >= 8:
+            self._flash_timer.stop()
+            if not self.underMouse():
+                self.setWindowOpacity(0.3)
+            return
+        opacity = 0.35 if self._flash_count % 2 == 1 else 1.0
+        self.setWindowOpacity(opacity)
 
     def _start_timer(self):
         self.timer = QTimer(self)
@@ -419,6 +435,8 @@ class MonitorWindow(QWidget):
         self._last_sessions = list(sessions)
         self._last_sig = sig
 
+        has_changes = bool(self._changed_sessions)
+
         self.setWindowOpacity(1.0)
         self._opacity_timer.stop()
         self._opacity_timer.start(3000)
@@ -427,6 +445,10 @@ class MonitorWindow(QWidget):
 
         if self._changed_sessions and not self._blink_timer.isActive():
             self._blink_timer.start(500)
+
+        if has_changes and not self._flash_timer.isActive():
+            self._flash_count = 0
+            self._flash_timer.start(150)
 
     def _toggle_blink(self):
         self._blink_phase = not self._blink_phase
