@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QEvent, QObject
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -58,12 +58,26 @@ SESSION_BADGE = {
 }
 
 
+class HoverShowHelper(QObject):
+    def __init__(self, watched, widget_to_show):
+        super().__init__(watched)
+        self._widget = widget_to_show
+        watched.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Enter:
+            self._widget.setVisible(True)
+        elif event.type() == QEvent.Type.Leave:
+            self._widget.setVisible(False)
+        return False
+
+
 class ViewMode(Enum):
     COMPACT = "compact"
     DETAIL = "detail"
 
 
-def _make_card(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False) -> QFrame:
+def _make_card(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False, on_locate=None) -> QFrame:
     outer = QFrame()
     outer.setStyleSheet("QFrame { background: transparent; border: none; }")
 
@@ -130,6 +144,14 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
     header.addWidget(name, 1)
 
     if session.is_alive:
+        if on_locate:
+            locate_btn = QLabel("⬍")
+            locate_btn.setFont(QFont("Microsoft YaHei", 10))
+            locate_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; padding: 0 4px;")
+            locate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            locate_btn.mousePressEvent = lambda e: on_locate() if e.button() == Qt.MouseButton.LeftButton else None
+            header.addWidget(locate_btn)
+
         badge_style = SESSION_BADGE.get(session.status, SESSION_BADGE["idle"])
         badge = QLabel(badge_style["label"])
         badge.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
@@ -198,7 +220,7 @@ def _make_card(session: Session, blinking: bool = False, blink_phase: bool = Fal
     return outer
 
 
-def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False) -> QFrame:
+def _make_compact_row(session: Session, blinking: bool = False, blink_phase: bool = False, is_new: bool = False, on_locate=None) -> QFrame:
     row = QFrame()
     row.setFixedHeight(28)
     if blinking and blink_phase:
@@ -247,6 +269,19 @@ def _make_compact_row(session: Session, blinking: bool = False, blink_phase: boo
     status.setFont(QFont("Microsoft YaHei", 9))
     status.setStyleSheet(f"color: {COLORS['status_text']}; background: transparent; border: none;")
     layout.addWidget(status)
+
+    locate_btn = None
+    if session.is_alive and on_locate:
+        locate_btn = QLabel("⬍")
+        locate_btn.setFont(QFont("Microsoft YaHei", 9))
+        locate_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; padding: 0 4px;")
+        locate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        locate_btn.mousePressEvent = lambda e: on_locate() if e.button() == Qt.MouseButton.LeftButton else None
+        locate_btn.setVisible(False)
+        layout.addWidget(locate_btn)
+
+    if locate_btn:
+        HoverShowHelper(row, locate_btn)
 
     return row
 
@@ -433,6 +468,11 @@ class MonitorWindow(QWidget):
         self._click_timer.timeout.connect(self._on_click_timeout)
         self._click_session = None
 
+        self._cleanup_timer = QTimer(self)
+        self._cleanup_timer.setSingleShot(True)
+        self._cleanup_timer.timeout.connect(self._hide_dead_sessions)
+        self._hide_dead = False
+
         self.refresh()
         self._set_view_mode(ViewMode.COMPACT)
 
@@ -480,6 +520,14 @@ class MonitorWindow(QWidget):
         )
         header_layout.addWidget(self.status_label)
 
+        # 添加按钮
+        add_btn = QLabel("+")
+        add_btn.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setStyleSheet(f"color: {COLORS['header_accent']}; background: transparent; border: none; padding: 0 6px;")
+        add_btn.mousePressEvent = lambda e: self._on_add_new() if e.button() == Qt.MouseButton.LeftButton else None
+        header_layout.addWidget(add_btn)
+
         # 视图切换按钮（合二为一）
         self.toggle_btn = QLabel("⊞")
         self.toggle_btn.setFont(QFont("Microsoft YaHei", 12))
@@ -524,6 +572,7 @@ class MonitorWindow(QWidget):
             self._stop_flash()
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 43:
             self._drag_pos = event.globalPosition().toPoint()
+        self._maybe_schedule_cleanup()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -661,6 +710,85 @@ class MonitorWindow(QWidget):
         new_mode = ViewMode.DETAIL if self._view_mode == ViewMode.COMPACT else ViewMode.COMPACT
         self._set_view_mode(new_mode)
 
+    def _on_add_new(self):
+        from PySide6.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "选择项目文件夹")
+        if folder:
+            import subprocess
+            subprocess.Popen(
+                ["powershell.exe", "-NoExit", "-Command", f"Set-Location '{folder}'; claude"],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+
+    def _locate_window(self, pid: int):
+        import ctypes
+        from ctypes import wintypes
+
+        def _get_hwnds_for_pid(target_pid: int) -> list:
+            results = []
+
+            def callback(hwnd, _):
+                if not ctypes.windll.user32.IsWindowVisible(hwnd):
+                    return True
+                proc_id = wintypes.DWORD()
+                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+                if proc_id.value == target_pid:
+                    results.append(hwnd)
+                return True
+
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            proc = EnumWindowsProc(callback)
+            ctypes.windll.user32.EnumWindows(proc, 0)
+            return results
+
+        def _bring_to_front(hwnd: int):
+            SW_RESTORE = 9
+            ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+
+            fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            fg_thread = ctypes.windll.user32.GetWindowThreadProcessId(fg_hwnd, None)
+            my_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+
+            if fg_thread != my_thread:
+                ctypes.windll.user32.AttachThreadInput(fg_thread, my_thread, True)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+                ctypes.windll.user32.AttachThreadInput(fg_thread, my_thread, False)
+            else:
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+
+        # Try target pid
+        hwnds = _get_hwnds_for_pid(pid)
+        if hwnds:
+            _bring_to_front(hwnds[0])
+            return
+
+        # Try parent / ancestors
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            candidates = []
+            parent = proc.parent()
+            if parent is not None:
+                candidates.append(parent)
+            candidates.extend(proc.parents())
+            for candidate in candidates:
+                hwnds = _get_hwnds_for_pid(candidate.pid)
+                if hwnds:
+                    _bring_to_front(hwnds[0])
+                    return
+        except Exception:
+            pass
+
+    def _maybe_schedule_cleanup(self):
+        sessions = load_sessions()
+        has_dead = any(not s.is_alive for s in sessions)
+        if has_dead and not self._cleanup_timer.isActive():
+            self._cleanup_timer.start(5000)
+
+    def _hide_dead_sessions(self):
+        self._hide_dead = True
+        self.refresh()
+
     def _set_view_mode(self, mode: ViewMode):
         if self._view_mode == mode:
             return
@@ -680,6 +808,8 @@ class MonitorWindow(QWidget):
         self._rebuild_ui(sessions)
 
     def _rebuild_ui(self, sessions: list[Session]):
+        if self._hide_dead:
+            sessions = [s for s in sessions if s.is_alive]
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
@@ -705,7 +835,10 @@ class MonitorWindow(QWidget):
             for i, session in enumerate(sessions):
                 is_new = session.session_id in self._new_sessions
                 blinking = session.session_id in self._changed_sessions or is_new
-                row = _make_compact_row(session, blinking, self._blink_phase, is_new)
+                row = _make_compact_row(
+                    session, blinking, self._blink_phase, is_new,
+                    on_locate=lambda pid=session.pid: self._locate_window(pid)
+                )
                 row.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
                     row.mouseDoubleClickEvent = self._make_row_double_click_handler(session)
@@ -718,7 +851,10 @@ class MonitorWindow(QWidget):
                 col = i % cols
                 is_new = session.session_id in self._new_sessions
                 blinking = session.session_id in self._changed_sessions or is_new
-                card = _make_card(session, blinking, self._blink_phase, is_new)
+                card = _make_card(
+                    session, blinking, self._blink_phase, is_new,
+                    on_locate=lambda pid=session.pid: self._locate_window(pid)
+                )
                 card.mousePressEvent = self._make_row_click_handler(session)
                 if blinking:
                     card.mouseDoubleClickEvent = self._make_row_double_click_handler(session)
