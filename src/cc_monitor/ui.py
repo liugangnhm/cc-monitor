@@ -628,6 +628,8 @@ class MonitorWindow(QWidget):
             if event.button() == Qt.MouseButton.LeftButton:
                 self._click_session = session
                 self._click_timer.start(250)
+                if self._flash_timer.isActive():
+                    self._stop_flash()
                 event.accept()
         return handler
 
@@ -635,6 +637,8 @@ class MonitorWindow(QWidget):
         def handler(event):
             self._click_timer.stop()
             self._click_session = None
+            if self._flash_timer.isActive():
+                self._stop_flash()
             self._show_session_detail(session)
             event.accept()
         return handler
