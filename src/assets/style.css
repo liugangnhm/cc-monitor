@@ -1,0 +1,53 @@
+:root {
+  --window-bg: #eef1f5;
+  --card-bg: #ffffff;
+  --card-border: #e2e8f0;
+  --title: #0f172a;
+  --subtitle: #94a3b8;
+  --separator: #f1f5f9;
+  --accent-busy: #f59e0b;
+  --accent-idle: #3b82f6;
+  --accent-dead: #e2e8f0;
+  --dot-done: #22c55e;
+  --dot-active: #f59e0b;
+  --dot-pending: #cbd5e1;
+  --badge-busy-bg: #fef3c7;
+  --badge-busy-text: #b45309;
+  --badge-idle-bg: #dbeafe;
+  --badge-idle-text: #1e40af;
+  --task-text: #334155;
+  --task-done-text: #94a3b8;
+  --empty-text: #94a3b8;
+  --header-bg: #ffffff;
+  --header-title: #0f172a;
+  --header-accent: #6366f1;
+  --status-text: #64748b;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Microsoft YaHei', sans-serif;
+  background: var(--window-bg);
+  color: var(--title);
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c4c9d0;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a5ac;
+}

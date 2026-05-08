@@ -33,3 +33,12 @@ venv/
 *.swp
 *.swo
 *~
+
+# Node.js
+node_modules/
+
+# Tauri
+src-tauri/target/
+
+# Legacy backups
+legacy/
